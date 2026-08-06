@@ -9,3 +9,9 @@
 
 # De gebouwde app-bundle (make-app.sh)
 /HopOS Imager.app/
+
+# Gegenereerd door tools/mkicon (icon.png zelf staat WEL in de repo: hij wordt
+# ge-embed in de binary)
+/icon.iconset/
+/icon-sheet.png
+/hop-imager-macos-*.zip

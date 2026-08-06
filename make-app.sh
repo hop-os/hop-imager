@@ -23,8 +23,15 @@ VERSION="${VERSION:-0.0.0-dev}"
 go build -trimpath -ldflags "-X main.version=$VERSION" -o hop-imager .
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp hop-imager "$APP/Contents/MacOS/hop-imager"
+
+# Het icoon: onze bunny (tools/mkicon tekent hem uit één vormdefinitie). Vóór
+# het ondertekenen, want resources vallen onder de signatuur.
+go run ./tools/mkicon >/dev/null
+if command -v iconutil >/dev/null 2>&1; then
+	iconutil -c icns icon.iconset -o "$APP/Contents/Resources/icon.icns"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -39,6 +46,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleShortVersionString</key>  <string>$VERSION</string>
 	<key>CFBundleVersion</key>             <string>$VERSION</string>
 	<key>LSMinimumSystemVersion</key>      <string>12.0</string>
+	<key>CFBundleIconFile</key>            <string>icon</string>
 	<key>NSHighResolutionCapable</key>     <true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>HopOS Imager looks for running HopOS nodes on your network by connecting to their console port. It sends nothing but the connection itself — no keys, no credentials.</string>
@@ -46,11 +54,33 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc ondertekenen: TCC onthoudt de toestemming per bundle-identiteit, en
-# zonder signatuur is die identiteit er niet — dan vraagt macOS het elke build
-# opnieuw (of nooit).
-codesign --force --sign - --identifier "$ID" "$APP" >/dev/null 2>&1 ||
-	codesign --force --sign - "$APP"
+# ONDERTEKENEN, en dat is meer dan nettigheid: TCC onthoudt toestemmingen (zoals
+# het lokale netwerk, dat FIND nodig heeft) per SIGNING-IDENTITEIT. Ad-hoc
+# ondertekenen geeft elke build een nieuwe identiteit, dus vraagt macOS het elke
+# keer opnieuw. Een Developer ID is één vaste identiteit: één keer toestaan, en
+# het blijft gelden — ook na een update.
+#
+# Is er een Developer ID in de keychain (of staat SIGN_ID gezet), dan gebruiken
+# we die, mét hardened runtime en een timestamp — beide een EIS voor
+# notarisatie. Anders valt het terug op ad-hoc, zodat dit script ook werkt op een
+# machine zonder certificaat (en in CI zonder secrets).
+SIGN_ID="${SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null |
+	sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
+if [ -n "$SIGN_ID" ]; then
+	codesign --force --options runtime --timestamp \
+		--sign "$SIGN_ID" --identifier "$ID" "$APP"
+	echo "ondertekend met: $SIGN_ID" >&2
+else
+	codesign --force --sign - --identifier "$ID" "$APP" >/dev/null 2>&1 ||
+		codesign --force --sign - "$APP"
+	echo "ad-hoc ondertekend (geen Developer ID gevonden) — macOS vraagt zijn" >&2
+	echo "toestemmingen dan bij elke build opnieuw" >&2
+fi
+
+# Notarisatie (los, want dit vraagt inloggegevens bij Apple): zonder dit blijft
+# een gedownloade app geweigerd worden, ook mét Developer ID.
+#	xcrun notarytool store-credentials hopos --apple-id … --team-id … --password …
+#	./make-app.sh && NOTARY_PROFILE=hopos ./notarize.sh
 
 echo "$APP klaar — start met: open '$APP'" >&2
 echo "(eerste scan vraagt toestemming voor het lokale netwerk; daarna staat hij in Privacy → Lokaal netwerk)" >&2

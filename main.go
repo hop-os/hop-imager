@@ -34,6 +34,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
 	"image/color"
 	"net/url"
@@ -68,6 +69,12 @@ import (
 // node prima, elke Go-dial in nul milliseconden "no route to host".
 const blockedHint = "macOS needs to allow this app on the local network. Run it as the app bundle (./make-app.sh, then open \"HopOS Imager.app\") and approve the prompt, " +
 	"or enable it under System Settings → Privacy & Security → Local Network. A loose binary has no identity to hang that permission on, so it is refused silently."
+
+// iconPNG is de bunny uit tools/mkicon: hetzelfde beeld als het app-icoon, ook
+// als de tool als losse binary draait (Linux, Windows) en er geen bundle is.
+//
+//go:embed icon.png
+var iconPNG []byte
 
 // version wordt bij het bouwen ingevuld (-ldflags "-X main.version=…"); zie
 // make-app.sh en .github/workflows/release.yml.
@@ -254,6 +261,7 @@ func main() {
 
 	a := app.NewWithID("org.gethop.imager")
 	a.Settings().SetTheme(hopTheme{})
+	a.SetIcon(fyne.NewStaticResource("icon.png", iconPNG))
 	u := &ui{win: a.NewWindow("HopOS Imager"), devices: map[string]disk.Device{}}
 
 	u.progress = widget.NewProgressBar()
