@@ -112,6 +112,7 @@ type ui struct {
 	imageLbl                *widget.Label
 	imageTags               *fyne.Container
 	imagePath               string
+	keepCfg                 *widget.Check
 
 	// CONFIGURE
 	cfgEntry  *widget.Entry
@@ -361,6 +362,12 @@ func (u *ui) burnTab() fyne.CanvasObject {
 
 	cardRow := u.targetRow(nil, nil)
 
+	// Standaard AAN (Derek 06-08): dit is wat een update hoort te doen — nieuwe
+	// code, dezelfde node. Alleen voor een kaart of stick; een image-bestand
+	// heeft geen config van een node om te bewaren.
+	u.keepCfg = widget.NewCheck("Keep this card's config — its name, keys and jobs survive the update", nil)
+	u.keepCfg.SetChecked(true)
+
 	// Eén knop: schrijven ís schrijven-en-verifiëren. Een losse "verify"
 	// bestond ook en die is weg (Derek 06-08) — hij kon niets zinnigs meer
 	// zeggen zodra macOS de verse kaart had gemount en er zijn eigen metadata
@@ -378,6 +385,7 @@ func (u *ui) burnTab() fyne.CanvasObject {
 			chosenRow,
 			widget.NewSeparator(),
 			cardRow,
+			u.keepCfg,
 			writeBtn,
 			section("Console"),
 		),
@@ -440,16 +448,34 @@ func (u *ui) writeCard() {
 					}
 					u.log(fmt.Sprintf("Writing %d MB to %s (unmounting first), then reading it back…", st.Size()>>20, d.RawPath))
 					start := time.Now()
-					at, err := opWrite(u.imagePath, d.RawPath, u.progressCB())
+					res, err := opWrite(u.imagePath, d.RawPath, u.keepCfg.Checked,
+						func(p string) { u.log("· " + p + "…") }, u.progressCB())
 					if err != nil {
 						u.fail(err)
 						return
 					}
-					if at < 0 {
-						u.log(fmt.Sprintf("WRITE OK and verified in %.0fs — %d MB read back byte for byte. Ready to boot (or set its config first).",
-							time.Since(start).Seconds(), st.Size()>>20))
-					} else {
-						u.log(fmt.Sprintf("WRITE FAILED — the card differs from the image at byte %#x. Try again, or another card.", at))
+					if res.MismatchAt >= 0 {
+						u.log(fmt.Sprintf("WRITE FAILED — the card differs from the image at byte %#x. Try again, or another card.", res.MismatchAt))
+						return
+					}
+					u.log(fmt.Sprintf("WRITE OK and verified in %.0fs — %d MB read back byte for byte.",
+						time.Since(start).Seconds(), st.Size()>>20))
+					switch {
+					case res.Kept && res.KeptNode != "":
+						u.log("KEPT the config of node " + res.KeptNode + " — same node, new code. Backup: " + res.Backup)
+					case res.Kept:
+						u.log("KEPT the config that was on the card. Backup: " + res.Backup)
+					case u.keepCfg.Checked && res.Backup == "":
+						u.log("No config found on the card to keep — it now carries this image's default.")
+					}
+					if len(res.NewKeys) > 0 {
+						// Geen merge, wel eerlijk: dit is wat de nieuwe default
+						// zet en jouw config niet heeft.
+						u.log("Note: the new default config also sets " + strings.Join(res.NewKeys, ", ") +
+							" — your kept config does not. Add it in CONFIGURE if you want it.")
+					}
+					if res.Warning != "" {
+						u.log("WARNING: " + res.Warning)
 					}
 				})
 			}, u.win)

@@ -34,6 +34,27 @@ before anything can mount it. That is the only moment the answer means
 something — verify a minute later and you are comparing against bytes the
 operating system wrote itself the instant it mounted your fresh card.
 
+**Keep this card's config** is on by default, because that is what updating a
+node should do: new code, same node. Before a single byte is written the tool
+reads the config that is already on the card, saves a copy on your machine, and
+puts it back into the fresh image afterwards — so the node keeps its name, its
+API key, its S3 credentials and its jobs. The whole sequence lives in one open
+device: read, back up, write, verify, restore. One authorization, and the
+verification still means what it says (the config goes back *after* the
+comparison, otherwise the card would legitimately differ from the image).
+
+It keeps your config **verbatim**. A config is a decision you made, and quietly
+merging it with a newer default would change decisions — with repeatable lines
+like `hopos.init[]` there is no honest merge anyway. Instead the tool tells you
+what the new default sets that your config lacks, so you can add it in CONFIGURE
+if you want it. It also warns when your kept config seeds a desktop but the
+image you just wrote is headless: that display job would never get the
+framebuffer.
+
+The backup lands in your user config directory with mode `0600` — it contains
+your keys, in plain text, and the tool names the file in the log so that is never
+a surprise. A flash that dies halfway can never eat your API key.
+
 ### CONFIGURE — change the node config, afterwards
 
 ![CONFIGURE tab](docs/configure.png)

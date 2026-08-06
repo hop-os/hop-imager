@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/xinix00/hop-imager/internal/cfgwin"
 	"github.com/xinix00/hop-imager/internal/disk"
@@ -34,6 +36,11 @@ const sectorSize = 512
 // isDevice zegt of het pad een rauw blok-device is (en dus unmount plus
 // authopen vraagt) of een gewoon image-bestand.
 func isDevice(path string) bool { return strings.HasPrefix(path, "/dev/") }
+
+// keepEligible: alleen een kaart of stick draagt de config van een node, dus
+// alleen daar is er iets te bewaren. Een variabele en geen directe aanroep,
+// zodat de test de hele beweging op een bestand kan naspelen.
+var keepEligible = isDevice
 
 // openTarget opent een doel: een device via authopen, een bestand gewoon.
 func openTarget(path string, write bool) (*os.File, error) {
@@ -50,41 +57,79 @@ func openTarget(path string, write bool) (*os.File, error) {
 	return priv.OpenDevice(path, write)
 }
 
-// opWrite schrijft het image naar het doel en verifieert het meteen daarna op
-// DEZELFDE open descriptor.
+// burnResult is wat één schrijfbeweging heeft opgeleverd: is het image
+// byte-exact geland, en is de config die er stond teruggezet.
+type burnResult struct {
+	MismatchAt int64    // -1 = het image staat er byte-voor-byte op
+	Kept       bool     // de config van de kaart is teruggezet
+	KeptNode   string   // hopos.node uit die config (voor de melding)
+	Backup     string   // pad van de veiligheidskopie
+	NewKeys    []string // sleutels die de NIEUWE default heeft en de bewaarde config niet
+	Warning    string   // een mismatch die de gebruiker moet weten
+}
+
+// opWrite schrijft het image naar het doel, verifieert het meteen op DEZELFDE
+// open descriptor, en zet (met keepConfig) de config terug die er al stond.
 //
-// WAAROM DIRECT EN NIET LATER (en dit was Dereks "verify FAILED op twee
-// kaarten", 06-08): zodra de write klaar is en het device dichtgaat, ziet macOS
-// een verse FAT-partitie, mount hem automatisch en schrijft er zijn eigen
-// metadata in (.Spotlight-V100, .fseventsd, de dirty-bit). Een verificatie
-// dáárna vergelijkt dus image-bytes met kaart-bytes die het systeem net heeft
-// aangepast — en meldt terecht een verschil dat niets met de flash te maken
-// heeft. Meteen verifiëren geeft het antwoord dat je wilt weten: is er goed
-// geschreven?
+// WAAROM DE HELE BEWEGING IN ÉÉN OPEN ZIT: het is één autorisatie in plaats van
+// drie, en de verificatie klopt alleen zó. Zodra het device dichtgaat ziet macOS
+// een verse FAT-partitie, mount hem en schrijft er zijn eigen metadata in
+// (.Spotlight-V100, .fseventsd, de dirty-bit) — een verificatie daarná
+// vergelijkt met bytes die het systeem net heeft veranderd (Dereks "verify
+// FAILED op twee kaarten", 06-08, terwijl beide flashes goed waren).
 //
-// mismatchAt is de eerste byte die verschilt, of -1 als alles klopt.
-func opWrite(imagePath, target string, prog func(done, total int64)) (mismatchAt int64, err error) {
+// De volgorde is niet vrij:
+//
+//  1. lezen wat er staat  — de config van de node zoals hij nu is
+//  2. back-up naar schijf — vóór er één byte overheen gaat
+//  3. schrijven
+//  4. VERIFIËREN          — nog steeds byte-identiek aan het image
+//  5. de config terugzetten
+//
+// Stap 5 ná stap 4, want daarna verschilt de kaart legitiem van het image (jouw
+// config staat in het venster) en zou de verificatie onzin melden.
+func opWrite(imagePath, target string, keepConfig bool, phase func(string), prog func(done, total int64)) (res burnResult, err error) {
+	res.MismatchAt = -1
 	img, err := os.Open(imagePath)
 	if err != nil {
-		return 0, err
+		return res, err
 	}
 	defer img.Close()
 	st, err := img.Stat()
 	if err != nil {
-		return 0, err
+		return res, err
 	}
 	out, err := openTarget(target, true)
 	if err != nil {
-		return 0, err
+		return res, err
 	}
 	defer out.Close()
+
+	// 1+2. De config die er nu staat, en meteen een kopie op schijf. Alleen op
+	// een device: een image-bestand naar een image-bestand kopiëren is geen
+	// bestaand geval.
+	var kept []byte
+	if keepConfig && keepEligible(target) {
+		phase("reading the config that is on the card")
+		if w, ferr := cfgwin.Find(out); ferr == nil {
+			if c, cerr := cfgwin.Content(out, w); cerr == nil && len(c) > 0 {
+				kept = c
+				res.KeptNode = cfgValue(c, "hopos.node")
+				res.Backup, _ = saveKept(c, res.KeptNode)
+			}
+		}
+	}
+
+	// 3. Schrijven. De fd staat nog op 0: Find en Content lezen met ReadAt en
+	// verzetten de offset niet.
+	phase("writing the image")
 	buf := make([]byte, 4<<20)
 	var done int64
 	for {
 		n, rerr := img.Read(buf)
 		if n > 0 {
 			if _, werr := out.Write(buf[:n]); werr != nil {
-				return 0, werr
+				return res, werr
 			}
 			done += int64(n)
 			prog(done, st.Size())
@@ -93,14 +138,140 @@ func opWrite(imagePath, target string, prog func(done, total int64)) (mismatchAt
 			break
 		}
 		if rerr != nil {
-			return 0, rerr
+			return res, rerr
 		}
 	}
 	// Tolerante sync: een raw device kan geen fsync (zie cfgwin.Sync).
 	if err := cfgwin.Sync(out); err != nil {
-		return 0, err
+		return res, err
 	}
-	return compare(img, out, st.Size(), prog)
+
+	// 4. Verifiëren.
+	phase("verifying")
+	at, err := compare(img, out, st.Size(), prog)
+	if err != nil {
+		return res, err
+	}
+	res.MismatchAt = at
+	if at >= 0 || len(kept) == 0 {
+		return res, nil
+	}
+
+	// 5. De bewaarde config terug in het VERSE venster. Het venster zoeken we
+	// in het IMAGE-bestand en niet op de kaart: dat is een lokale schijf (dus
+	// snel) en de kaart is net byte-identiek bevonden, dus de coördinaten
+	// kloppen per definitie.
+	phase("putting your config back")
+	w, err := cfgwin.Find(img)
+	if err != nil {
+		res.Warning = "this image has no config window, so your config could not be put back: " + err.Error()
+		return res, nil
+	}
+	if def, derr := cfgwin.Content(img, w); derr == nil {
+		res.NewKeys = missingKeys(kept, def)
+		// Een desktop-config op een headless image zaait een display-job die
+		// het glas nooit krijgt: in een headless build zit geen grant-provider.
+		// Stille mismatch, dus hardop zeggen.
+		if isDesktop(kept) && !isDesktop(def) {
+			res.Warning = "your config seeds a desktop, but this is a headless image — the display job will never get the framebuffer. Switch to the desktop image, or drop those jobs in CONFIGURE."
+		}
+	}
+	if err := cfgwin.Replace(out, w, kept); err != nil {
+		res.Warning = "your config did not fit the new window (" + err.Error() + "), so the card carries the image default. Your config is safe in " + res.Backup
+		return res, nil
+	}
+	res.Kept = true
+	return res, nil
+}
+
+// saveKept legt de gelezen config op schijf vóór er iets overheen gaat.
+//
+// Dit is het vangnet dat de hele feature vertrouwd maakt: in zo'n config zit je
+// API-sleutel en je S3-secret, en een flash die halverwege stukloopt mag die
+// nooit opeten. Mode 0600 — het zijn geheimen in platte tekst, en de melding
+// noemt het bestand bij naam zodat dat geen verrassing is.
+func saveKept(cfg []byte, node string) (string, error) {
+	dir, err := keptDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	if node == "" {
+		node = "unnamed"
+	}
+	safe := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, node)
+	p := filepath.Join(dir, safe+"-"+time.Now().Format("20060102-150405")+".cfg")
+	return p, os.WriteFile(p, cfg, 0600)
+}
+
+// keptDir is waar de back-ups landen. Een variabele omdat os.UserConfigDir op
+// macOS geen omgevingsvariabele leest, en een test nooit in de echte config-map
+// van de gebruiker hoort te schrijven.
+var keptDir = func() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "hop-imager", "kept"), nil
+}
+
+// cfgValue leest één sleutel uit een config (eerste voorkomen, commentaar
+// overgeslagen) — zelfde regels als fw/bootcfg in HopOS zelf.
+func cfgValue(cfg []byte, key string) string {
+	for _, line := range strings.Split(string(cfg), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(k) == key {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// missingKeys zegt welke sleutels de nieuwe default zét en de bewaarde config
+// niet heeft. BEWUST GEEN MERGE: een config is een beslissing van de gebruiker,
+// en die stil samenvoegen verandert beslissingen — bij herhaalbare regels
+// (hopos.init[], hopos.apps[]) is "aanvullen of vervangen?" ook niet te weten.
+// Dus houden we letterlijk wat er stond en zeggen we wat je mist.
+func missingKeys(kept, def []byte) []string {
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(kept), "\n") {
+		if k := keyOf(line); k != "" {
+			have[k] = true
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(def), "\n") {
+		k := keyOf(line)
+		if k == "" || have[k] || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
+}
+
+func keyOf(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return ""
+	}
+	k, _, ok := strings.Cut(line, "=")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(k)
 }
 
 // compare vergelijkt n bytes van het image met het doel en geeft de eerste
