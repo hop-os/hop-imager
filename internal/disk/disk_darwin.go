@@ -4,9 +4,7 @@ package disk
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -113,38 +111,6 @@ func bytesOf(s string) int64 {
 	}
 	n, _ := strconv.ParseInt(f[0], 10, 64)
 	return n
-}
-
-// MountedConfig zoekt een gemounte hopos.cfg op deze schijf. Mount het OS de
-// bootpartitie (Pi, UEFI-stick), dan is het bestand lezen en schrijven GRATIS:
-// geen root, dus ook geen wachtwoordprompt om even je config te bekijken. Het
-// venster is even groot en ligt op dezelfde plek, dus dit schrijft exact
-// dezelfde bytes als het rauwe pad.
-//
-// Kaarten die niet mounten (Radxa) en configs die in de kernel zitten
-// (LicheeRV) hebben dit niet — die gaan raw, met escalatie. Vandaar dat dit
-// een pad-keuze is en geen tweede implementatie.
-func MountedConfig(d Device) (string, bool) {
-	out, err := exec.Command("mount").Output()
-	if err != nil {
-		return "", false
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.HasPrefix(line, "/dev/"+d.ID+"s") {
-			continue
-		}
-		// "/dev/disk4s1 on /Volumes/HOPOS (msdos, local, nodev)"
-		on := strings.Index(line, " on ")
-		par := strings.Index(line, " (")
-		if on < 0 || par < on {
-			continue
-		}
-		p := filepath.Join(line[on+4:par], "hopos.cfg")
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, true
-		}
-	}
-	return "", false
 }
 
 // UnmountPath is Unmount voor een worker die alleen het rauwe pad kent

@@ -79,7 +79,7 @@ func TestProbeVindtMeerdereNodes(t *testing.T) {
 			log = strings.Join(keep, "\n")
 		}
 		port := serve(t, log)
-		n, ok := probe(context.Background(), "127.0.0.1", port)
+		n, ok, _ := probe(context.Background(), "127.0.0.1", port)
 		if !ok {
 			t.Fatalf("node %s niet herkend", w.name)
 		}
@@ -131,7 +131,7 @@ func TestGeenValsPositief(t *testing.T) {
 		"random noise \x00\x01\x02",
 	} {
 		port := serve(t, payload)
-		if _, ok := probe(context.Background(), "127.0.0.1", port); ok {
+		if _, ok, _ := probe(context.Background(), "127.0.0.1", port); ok {
 			t.Errorf("vals positief op %q", payload)
 		}
 	}
@@ -141,7 +141,7 @@ func TestGeenValsPositief(t *testing.T) {
 // anders duurt een /24-scan minuten.
 func TestDodePoortKostGeenTijd(t *testing.T) {
 	start := time.Now()
-	if _, ok := probe(context.Background(), "127.0.0.1", 1); ok {
+	if _, ok, _ := probe(context.Background(), "127.0.0.1", 1); ok {
 		t.Error("poort 1 gaf een node")
 	}
 	if d := time.Since(start); d > time.Second {
@@ -159,6 +159,27 @@ func TestSubnetsBlijftBegrensd(t *testing.T) {
 	for _, ip := range h {
 		if net.ParseIP(ip) == nil {
 			t.Fatalf("ongeldig adres %q", ip)
+		}
+	}
+}
+
+// TestStatsBlocked: de tool moet "macOS blokkeert het" kunnen onderscheiden van
+// "er staat niets aan". Onbereikbaar-in-nul-tijd op bijna alles is het eerste;
+// gewone time-outs zijn het tweede.
+func TestStatsBlocked(t *testing.T) {
+	cases := []struct {
+		s    Stats
+		want bool
+	}{
+		{Stats{Tried: 254, Unreachable: 254}, true},            // alles geweigerd
+		{Stats{Tried: 254, Unreachable: 250}, true},            // vrijwel alles
+		{Stats{Tried: 254, Unreachable: 0}, false},             // gewoon een leeg net
+		{Stats{Tried: 254, Unreachable: 254, Found: 1}, false}, // gevonden = niet geblokkeerd
+		{Stats{Tried: 2, Unreachable: 2}, false},               // te weinig om te concluderen
+	}
+	for _, c := range cases {
+		if got := c.s.Blocked(); got != c.want {
+			t.Errorf("%+v: Blocked() = %v, wil %v", c.s, got, c.want)
 		}
 	}
 }

@@ -16,13 +16,20 @@ package find
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
+
+// debugProbe zet de meting aan (tijdelijk, tijdens het jagen op een node die
+// niet gevonden werd).
+var debugProbe = os.Getenv("HOPFIND_DEBUG") != ""
 
 // DefaultPort is wat elke meegeleverde config zet (hopos.console=5555).
 const DefaultPort = 5555
@@ -113,26 +120,50 @@ func Subnets() []string {
 	return hosts
 }
 
+// Stats vat een scan samen. Unreachable is het aantal adressen dat METEEN
+// "no route to host" gaf: dat is niet "host is er niet" (dan krijg je een
+// time-out of een refused), maar macOS dat de app de toegang tot het lokale
+// netwerk ontzegt. Zonder dat onderscheid ziet een geblokkeerde app eruit als
+// een leeg netwerk — en dat is de ergste soort stilte.
+type Stats struct {
+	Tried       int
+	Found       int
+	Unreachable int
+}
+
+// Blocked: bijna alles onbereikbaar in nul tijd en niets gevonden = de
+// Local-Network-permissie ontbreekt (zie make-app.sh voor het waarom).
+func (s Stats) Blocked() bool {
+	return s.Found == 0 && s.Tried > 4 && s.Unreachable*4 > s.Tried*3
+}
+
 // Scan probeert elk adres en meldt elke gevonden node via found (van een
 // willekeurige goroutine — de aanroeper zorgt voor de UI-thread). progress
 // wordt na elke poging aangeroepen.
-func Scan(ctx context.Context, hosts []string, port int, found func(Node), progress func(done, total int)) {
+func Scan(ctx context.Context, hosts []string, port int, found func(Node), progress func(done, total int)) Stats {
 	const workers = 128
 	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		done int
-		ch   = make(chan string)
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		done  int
+		stats = Stats{Tried: len(hosts)}
+		ch    = make(chan string)
 	)
 	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for ip := range ch {
-				n, ok := probe(ctx, ip, port)
+				n, ok, unreach := probe(ctx, ip, port)
 				mu.Lock()
 				done++
 				d := done
+				if unreach {
+					stats.Unreachable++
+				}
+				if ok {
+					stats.Found++
+				}
 				mu.Unlock()
 				if ok && found != nil {
 					found(n)
@@ -148,12 +179,13 @@ func Scan(ctx context.Context, hosts []string, port int, found func(Node), progr
 		case <-ctx.Done():
 			close(ch)
 			wg.Wait()
-			return
+			return stats
 		case ch <- ip:
 		}
 	}
 	close(ch)
 	wg.Wait()
+	return stats
 }
 
 // probe verbindt, leest kort mee en beslist of dit een HopOS-node is.
@@ -161,18 +193,24 @@ func Scan(ctx context.Context, hosts []string, port int, found func(Node), progr
 // De leesdeadline is de hele truc: de node stuurt zijn geschiedenis in één
 // keer zodra we verbinden (conport.stream), dus 700ms is genoeg voor een volle
 // boot-log — en kort genoeg om 254 adressen in seconden te doen.
-func probe(ctx context.Context, ip string, port int) (Node, bool) {
+func probe(ctx context.Context, ip string, port int) (n Node, ok, unreachable bool) {
 	d := net.Dialer{Timeout: 400 * time.Millisecond}
 	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip, fmt.Sprint(port)))
 	if err != nil {
-		return Node{}, false
+		if debugProbe {
+			fmt.Println("DEBUG dial", ip, err)
+		}
+		return Node{}, false, errors.Is(err, syscall.EHOSTUNREACH)
 	}
 	defer c.Close()
 	text := read(c, 700*time.Millisecond, 256<<10)
-	if !isHopOS(text) {
-		return Node{}, false
+	if debugProbe {
+		fmt.Printf("DEBUG %s: %d bytes, hopos=%v, eerste=%q\n", ip, len(text), isHopOS(text), text[:min(len(text), 80)])
 	}
-	return parse(ip, text), true
+	if !isHopOS(text) {
+		return Node{}, false, false
+	}
+	return parse(ip, text), true, false
 }
 
 // Console leest de console van één node — hetzelfde kanaal, alleen langer, om

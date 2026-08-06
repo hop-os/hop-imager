@@ -61,6 +61,20 @@ user process — you never have to start it with `sudo`.
 
 ## Build and run
 
+On macOS, build the **app bundle** — that is not cosmetic. Since Sequoia, macOS
+requires an app to be allowed on the local network, and a loose binary has no
+identity to hang that permission on: every connection to a LAN peer then fails
+instantly with "no route to host", so FIND sees an empty network instead of
+your nodes. (The gateway and your own machine are exempt, which is exactly why
+the failure is so confusing.)
+
+```sh
+./make-app.sh
+open "HopOS Imager.app"      # approve the local-network prompt on first scan
+```
+
+Plain build, fine for BURN and CONFIGURE:
+
 ```sh
 go build .
 ./hop-imager

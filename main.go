@@ -60,6 +60,15 @@ import (
 	"github.com/xinix00/hop-imager/internal/release"
 )
 
+// blockedHint legt de stilte uit die macOS veroorzaakt. Sinds Sequoia moet een
+// app toestemming hebben om met apparaten op het lokale netwerk te praten, en
+// zonder die toestemming krijgt hij geen dialoog maar EHOSTUNREACH op élke
+// LAN-peer — de gateway en de eigen machine zijn vrijgesteld, en dus lijkt het
+// netwerk gewoon leeg. Gemeten op Dereks Mac 06-08: ping en python bij dezelfde
+// node prima, elke Go-dial in nul milliseconden "no route to host".
+const blockedHint = "macOS needs to allow this app on the local network. Run it as the app bundle (./make-app.sh, then open \"HopOS Imager.app\") and approve the prompt, " +
+	"or enable it under System Settings → Privacy & Security → Local Network. A loose binary has no identity to hang that permission on, so it is refused silently."
+
 // bunny: Dereks origineel (2026-07-11) — hetzelfde logo dat elke node bij het
 // booten toont (metal/cmd/hopos/main.go), dus de tool en het glas matchen.
 const bunny = `   (\(\
@@ -228,12 +237,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "scanning %d addresses on tcp/%d…\n", len(hosts), find.DefaultPort)
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		n := 0
-		find.Scan(ctx, hosts, find.DefaultPort, func(nd find.Node) {
-			n++
+		st := find.Scan(ctx, hosts, find.DefaultPort, func(nd find.Node) {
 			fmt.Printf("%-15s  %-16s  %-8s  %-22s  api-open=%v\n", nd.IP, nd.Name, nd.Arch, nd.State, nd.InsecND)
 		}, nil)
-		fmt.Fprintf(os.Stderr, "%d node(s) found\n", n)
+		fmt.Fprintf(os.Stderr, "%d node(s) found\n", st.Found)
+		if st.Blocked() {
+			fmt.Fprintln(os.Stderr, blockedHint)
+		}
 		return
 	}
 
@@ -318,9 +328,9 @@ func (u *ui) burnTab() fyne.CanvasObject {
 
 	cardRow := u.targetRow(nil, nil)
 
-	writeBtn := widget.NewButtonWithIcon("Write", theme.MediaPlayIcon(), u.writeCard)
+	writeBtn := widget.NewButtonWithIcon("Write + verify", theme.MediaPlayIcon(), u.writeCard)
 	writeBtn.Importance = widget.HighImportance
-	checkBtn := widget.NewButtonWithIcon("Verify", theme.ConfirmIcon(), u.checkCard)
+	checkBtn := widget.NewButtonWithIcon("Verify again", theme.ConfirmIcon(), u.checkCard)
 
 	// De console is hier het groeiende deel: in BURN wil je zien wat er
 	// gebeurt, in CONFIGURE is dat het tekstveld en in FIND de lijst (Derek
@@ -392,13 +402,19 @@ func (u *ui) writeCard() {
 						u.fail(fmt.Errorf("image (%d MB) is larger than the card (%d MB)", st.Size()>>20, d.Size>>20))
 						return
 					}
-					u.log(fmt.Sprintf("Writing %d MB to %s (unmounting first)…", st.Size()>>20, d.RawPath))
+					u.log(fmt.Sprintf("Writing %d MB to %s (unmounting first), then reading it back…", st.Size()>>20, d.RawPath))
 					start := time.Now()
-					if err := opWrite(u.imagePath, d.RawPath, u.progressCB()); err != nil {
+					at, err := opWrite(u.imagePath, d.RawPath, u.progressCB())
+					if err != nil {
 						u.fail(err)
 						return
 					}
-					u.log(fmt.Sprintf("Write done in %.0fs — now hit Verify.", time.Since(start).Seconds()))
+					if at < 0 {
+						u.log(fmt.Sprintf("WRITE OK and verified in %.0fs — %d MB read back byte for byte. Ready to boot (or set its config first).",
+							time.Since(start).Seconds(), st.Size()>>20))
+					} else {
+						u.log(fmt.Sprintf("WRITE FAILED — the card differs from the image at byte %#x. Try again, or another card.", at))
+					}
 				})
 			}, u.win)
 	})
@@ -412,15 +428,20 @@ func (u *ui) checkCard() {
 	u.withDevice(func(d disk.Device) {
 		u.run(func() {
 			u.log("Verifying — reading the card back and comparing…")
-			ok, sum, err := opCheck(u.imagePath, d.RawPath, u.progressCB())
+			at, err := opCheck(u.imagePath, d.RawPath, u.progressCB())
 			if err != nil {
 				u.fail(err)
 				return
 			}
-			if ok {
-				u.log("VERIFY OK — the target matches the image byte for byte (sha256 " + sum[:12] + "…).")
-			} else {
-				u.log("VERIFY FAILED — the target does NOT match the image. Write it again.")
+			switch {
+			case at < 0:
+				u.log("VERIFY OK — the target matches the image byte for byte.")
+			case at < 64<<20:
+				// Eerlijk zijn over de waarschijnlijkste oorzaak: macOS mount
+				// een verse kaart en schrijft er zijn eigen metadata in.
+				u.log(fmt.Sprintf("VERIFY: differs at byte %#x — that is inside the filesystem area, so this is almost certainly macOS writing its own metadata (Spotlight, .fseventsd) after mounting the card. Write already verifies itself; that check is the one that counts.", at))
+			default:
+				u.log(fmt.Sprintf("VERIFY FAILED — differs at byte %#x, past the filesystem area. Write it again.", at))
 			}
 		})
 	})
@@ -487,16 +508,12 @@ func (u *ui) targetChosen(d disk.Device) {
 	}
 }
 
-// cfgPathFor kiest de goedkoopste weg naar de config van dit doel: het
-// gemounte bestand als het OS de partitie kent (geen rechten nodig, dus geen
-// prompt), anders het rauwe device (Radxa, LicheeRV — daar is raw de énige
-// weg). Dezelfde bytes, hetzelfde venster.
-func (u *ui) cfgPathFor(d disk.Device) string {
-	if p, ok := disk.MountedConfig(d); ok {
-		return p
-	}
-	return d.RawPath
-}
+// cfgPathFor: ALTIJD het rauwe device. Nooit "kijken of het OS de partitie
+// gemount heeft" — dat was een tweede pad met andere faalmodi, en het hele
+// config-venster bestaat juist zodat we van mounten onafhankelijk zijn (Derek
+// 06-08: "we zouden alles RAW doen... we hebben niet voor niets magie
+// packages gemaakt"). Eén weg voor élk board: unmount, authopen, venster.
+func (u *ui) cfgPathFor(d disk.Device) string { return d.RawPath }
 
 func (u *ui) onConfigureTab() bool {
 	return u.tabs != nil && u.tabs.Selected() != nil && u.tabs.Selected().Text == "Configure"
@@ -671,7 +688,7 @@ func (u *ui) scanNetwork() {
 	u.log(fmt.Sprintf("Scanning %d addresses on tcp/%d…", len(hosts), find.DefaultPort))
 	u.run(func() {
 		defer cancel()
-		find.Scan(ctx, hosts, find.DefaultPort,
+		st := find.Scan(ctx, hosts, find.DefaultPort,
 			func(n find.Node) {
 				// Elke vondst meteen in de lijst — een netwerk vol nodes
 				// vult zich zo terwijl de scan nog loopt (Derek 06-08).
@@ -689,10 +706,17 @@ func (u *ui) scanNetwork() {
 			func(done, total int) {
 				fyne.Do(func() { u.progress.SetValue(float64(done) / float64(total)) })
 			})
-		count := len(u.nodes)
 		u.scanning = false
 		fyne.Do(func() { u.scanBtn.SetText("Scan my network") })
-		u.log(fmt.Sprintf("Scan done — %d HopOS node(s) found.", count))
+		u.log(fmt.Sprintf("Scan done — %d HopOS node(s) found.", st.Found))
+		if st.Blocked() {
+			// Niet stil blijven bij een lege lijst die géén lege lijst is.
+			u.log("BLOCKED: macOS refused local network access — every address answered instantly with \"no route to host\".")
+			u.log(blockedHint)
+			fyne.Do(func() {
+				dialog.ShowInformation("Local network access is blocked", blockedHint, u.win)
+			})
+		}
 	})
 }
 

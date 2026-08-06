@@ -55,8 +55,8 @@ func Find(f *os.File) (Window, error) {
 	default:
 		return Window{}, fmt.Errorf("%d config windows found at offsets %v — refusing to patch", len(hits), hits)
 	}
-	head := make([]byte, sectorAlign)
-	if _, err := f.ReadAt(head, hits[0]); err != nil {
+	head, err := readAt(f, hits[0], sectorAlign)
+	if err != nil {
 		return Window{}, err
 	}
 	win, clen, hlen, _ := parseHeader(head)
@@ -65,9 +65,7 @@ func Find(f *os.File) (Window, error) {
 
 // Content leest de echte config (zonder kopregel en padding) uit het venster.
 func Content(f *os.File, w Window) ([]byte, error) {
-	buf := make([]byte, w.ContentLen)
-	_, err := f.ReadAt(buf, w.Off+int64(w.HeaderLen))
-	return buf, err
+	return readAt(f, w.Off+int64(w.HeaderLen), w.ContentLen)
 }
 
 // Replace herschrijft het venster in-place met nieuwe config-inhoud en werkt
@@ -204,18 +202,39 @@ func scan(f *os.File, needle []byte, verify func([]byte) bool) ([]int64, error) 
 	return hits, nil
 }
 
+// readAt leest n bytes vanaf off, óók als dat niet sector-uitgelijnd is.
+//
+// EEN RAUW DEVICE EIST UITLIJNING: /dev/rdiskN is een character device en
+// accepteert alleen reads van een veelvoud van 512 bytes op een 512-uitgelijnd
+// offset. Doe je dat niet, dan krijg je EINVAL — "invalid argument" — en dat is
+// exact de fout waar het lezen van het config-venster op stukliep (gemeten op
+// Dereks Mac, 06-08: het venster begint uitgelijnd, maar de config erbinnen
+// begint ná de kopregel en is zelden een veelvoud van 512).
+//
+// Dus: lees het omliggende uitgelijnde bereik en snijd eruit wat gevraagd is.
+func readAt(f *os.File, off int64, n int) ([]byte, error) {
+	lo := off &^ (sectorAlign - 1)
+	hi := (off + int64(n) + sectorAlign - 1) &^ (sectorAlign - 1)
+	buf := make([]byte, hi-lo)
+	got, err := f.ReadAt(buf, lo)
+	if err != nil && got < int(off-lo)+n {
+		return nil, err
+	}
+	return buf[off-lo : off-lo+int64(n)], nil
+}
+
 // writeAligned schrijft data op een willekeurige offset via read-modify-write
 // van het omliggende sector-bereik — raw devices accepteren alleen
 // sector-uitgelijnde I/O.
 func writeAligned(f *os.File, off int64, data []byte) error {
 	lo := off &^ (sectorAlign - 1)
 	hi := (off + int64(len(data)) + sectorAlign - 1) &^ (sectorAlign - 1)
-	buf := make([]byte, hi-lo)
-	if n, err := f.ReadAt(buf, lo); err != nil && (err != io.EOF || int64(n) < off+int64(len(data))-lo) {
+	buf, err := readAt(f, lo, int(hi-lo))
+	if err != nil {
 		return err
 	}
 	copy(buf[off-lo:], data)
-	_, err := f.WriteAt(buf, lo)
+	_, err = f.WriteAt(buf, lo)
 	return err
 }
 
@@ -258,8 +277,8 @@ func fipFix(f *os.File, winOff int64, winLen int) error {
 		return fmt.Errorf("fip: %d param2 blocks found at %v, expected 1 — checksum fix refused", len(p2s), p2s)
 	}
 	p2 := p2s[0]
-	param2 := make([]byte, 4096)
-	if _, err := f.ReadAt(param2, p2); err != nil {
+	param2, err := readAt(f, p2, 4096)
+	if err != nil {
 		return err
 	}
 	fips, err := scan(f, []byte("CVBL01\n\x00"), nil)
@@ -280,8 +299,8 @@ func fipFix(f *os.File, winOff int64, winLen int) error {
 	if winOff < monOff || winOff+int64(winLen) > monOff+int64(monSize) {
 		return nil // venster ligt buiten de monitor — geen checksum-werk
 	}
-	monitor := make([]byte, monSize)
-	if _, err := f.ReadAt(monitor, monOff); err != nil {
+	monitor, err := readAt(f, monOff, monSize)
+	if err != nil {
 		return err
 	}
 	copy(param2[48:52], fipCksum(monitor))
