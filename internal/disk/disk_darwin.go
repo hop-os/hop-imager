@@ -4,66 +4,154 @@ package disk
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
-	"regexp"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// List geeft de externe, fysieke schijven — precies wat `diskutil list
-// external physical` als /dev/diskN meldt. Interne schijven blijven bewust
-// buiten beeld: dit is een flash-tool, en de systeemschijf hoort nooit in een
-// keuzelijst te staan.
+// List geeft de schijven waar een kaart-image naartoe mag. Dat is precies:
+// een héle fysieke schijf die verwisselbaar of extern is, en niet de schijf
+// waar dit systeem van boot.
+//
+// WAAROM NIET `diskutil list external physical` (mijn eerste poging, en het
+// koste Derek een lege lijst met de kaart al in de Mac): een INGEBOUWDE
+// SD-lezer meldt `Device Location: Internal`. De kaart in een MacBook is dus
+// "internal" en viel weg. Het veld dat een kaart van een systeemschijf
+// scheidt is `Removable Media` — Removable tegenover Fixed (gemeten 06-08:
+// disk4 "Built In SDXC Reader" Removable, disk0 "APPLE SSD" Fixed).
+//
+// Eén `diskutil info -all` levert alles in één procesaanroep, wat het ook
+// geschikt maakt om elke paar seconden te herhalen (de UI doet dat: een kaart
+// insteken hoort genoeg te zijn).
 func List() ([]Device, error) {
-	out, err := exec.Command("diskutil", "list", "external", "physical").Output()
+	out, err := exec.Command("diskutil", "info", "-all").Output()
 	if err != nil {
-		return nil, fmt.Errorf("diskutil list: %v", err)
+		return nil, fmt.Errorf("diskutil info -all: %v", err)
 	}
+	boot := bootDisk()
 	var devs []Device
-	re := regexp.MustCompile(`(?m)^/dev/(disk\d+) \(external, physical\):`)
-	for _, m := range re.FindAllStringSubmatch(string(out), -1) {
-		id := m[1]
-		name, size := info(id)
-		desc := fmt.Sprintf("%s — %s (%s)", id, name, humanSize(size))
-		devs = append(devs, Device{ID: id, RawPath: "/dev/r" + id, Desc: desc, Size: size})
+	for _, block := range strings.Split(string(out), "**********") {
+		f := fields(block)
+		id := f["Device Identifier"]
+		if id == "" || f["Whole"] != "Yes" || f["Virtual"] == "Yes" {
+			continue // partitie, container of een virtuele schijf
+		}
+		if id == boot {
+			continue // nooit de schijf waar we van draaien
+		}
+		removable := strings.Contains(f["Removable Media"], "Removable")
+		external := strings.EqualFold(f["Device Location"], "External")
+		if !removable && !external {
+			continue
+		}
+		size := bytesOf(f["Disk Size"])
+		name := f["Device / Media Name"]
+		if name == "" {
+			name = f["Media Name"]
+		}
+		devs = append(devs, Device{
+			ID:      id,
+			RawPath: "/dev/r" + id,
+			Desc:    fmt.Sprintf("%s — %s (%s)", id, name, humanSize(size)),
+			Size:    size,
+		})
 	}
 	return devs, nil
 }
 
-// info leest medianaam en grootte uit `diskutil info` — regelgebaseerd, want
-// diskutil heeft geen JSON en een plist-parser is dit niet waard.
-func info(id string) (string, int64) {
-	out, err := exec.Command("diskutil", "info", id).Output()
+// IDs is de goedkope variant voor de auto-verversing: alleen de namen van de
+// kandidaat-schijven, om te zien óf er iets veranderd is.
+func IDs() []string {
+	devs, err := List()
 	if err != nil {
-		return "?", 0
+		return nil
 	}
-	name, size := "?", int64(0)
-	for _, line := range strings.Split(string(out), "\n") {
+	ids := make([]string, 0, len(devs))
+	for _, d := range devs {
+		ids = append(ids, d.Desc)
+	}
+	return ids
+}
+
+// fields ontleedt één diskutil-blok: "  Sleutel:   waarde" per regel.
+func fields(block string) map[string]string {
+	m := map[string]string{}
+	for _, line := range strings.Split(block, "\n") {
 		k, v, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
 		}
-		switch strings.TrimSpace(k) {
-		case "Device / Media Name", "Media Name":
-			name = strings.TrimSpace(v)
-		case "Disk Size", "Total Size":
-			// "63.9 GB (63864569856 Bytes) (exactly ...)"
-			if i := strings.Index(v, "("); i >= 0 {
-				f := strings.Fields(v[i+1:])
-				if len(f) > 0 {
-					size, _ = strconv.ParseInt(f[0], 10, 64)
-				}
-			}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if k != "" && v != "" {
+			m[k] = v
 		}
 	}
-	return name, size
+	return m
+}
+
+// bootDisk is de héle schijf waar de systeemvolume op staat — die mag nooit in
+// de lijst komen.
+func bootDisk() string {
+	out, err := exec.Command("diskutil", "info", "/").Output()
+	if err != nil {
+		return ""
+	}
+	return fields(string(out))["Part of Whole"]
+}
+
+// bytesOf haalt het byte-getal uit "8.0 GB (7994343424 Bytes) (exactly …)".
+func bytesOf(s string) int64 {
+	i := strings.Index(s, "(")
+	if i < 0 {
+		return 0
+	}
+	f := strings.Fields(s[i+1:])
+	if len(f) == 0 {
+		return 0
+	}
+	n, _ := strconv.ParseInt(f[0], 10, 64)
+	return n
+}
+
+// MountedConfig zoekt een gemounte hopos.cfg op deze schijf. Mount het OS de
+// bootpartitie (Pi, UEFI-stick), dan is het bestand lezen en schrijven GRATIS:
+// geen root, dus ook geen wachtwoordprompt om even je config te bekijken. Het
+// venster is even groot en ligt op dezelfde plek, dus dit schrijft exact
+// dezelfde bytes als het rauwe pad.
+//
+// Kaarten die niet mounten (Radxa) en configs die in de kernel zitten
+// (LicheeRV) hebben dit niet — die gaan raw, met escalatie. Vandaar dat dit
+// een pad-keuze is en geen tweede implementatie.
+func MountedConfig(d Device) (string, bool) {
+	out, err := exec.Command("mount").Output()
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "/dev/"+d.ID+"s") {
+			continue
+		}
+		// "/dev/disk4s1 on /Volumes/HOPOS (msdos, local, nodev)"
+		on := strings.Index(line, " on ")
+		par := strings.Index(line, " (")
+		if on < 0 || par < on {
+			continue
+		}
+		p := filepath.Join(line[on+4:par], "hopos.cfg")
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // UnmountPath is Unmount voor een worker die alleen het rauwe pad kent
 // (/dev/rdisk4 of /dev/disk4 → diskutil unmountDisk disk4).
 func UnmountPath(raw string) error {
 	id := strings.TrimPrefix(strings.TrimPrefix(raw, "/dev/"), "r")
-	if id == "" || !strings.HasPrefix(id, "disk") {
+	if !strings.HasPrefix(id, "disk") {
 		return fmt.Errorf("not a disk device: %s", raw)
 	}
 	return Unmount(Device{ID: id})

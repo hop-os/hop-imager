@@ -11,6 +11,7 @@ func List() ([]Device, error) {
 	return nil, fmt.Errorf("device listing is not implemented on this OS yet (macOS first)")
 }
 
+func IDs() []string                { return nil }
 func Unmount(d Device) error       { return nil }
 func Eject(d Device) error         { return nil }
 func UnmountPath(raw string) error { return nil }

@@ -9,8 +9,12 @@
 // config-bewerking gaat altijd RAW via het #HOPCFG1-venster
 // (internal/cfgwin, formaatcontract met hop-os image/hopcfg) — dat werkt op
 // élk board, ook als het OS de partitie niet mount (Radxa) of als de config in
-// de kernel zit (LicheeRV). Rechten daarvoor komen van een verhoogde worker
-// (internal/priv), niet van "start de tool met sudo".
+// de kernel zit (LicheeRV). De rechten daarvoor komen van authopen
+// (internal/priv): op macOS is root NIET genoeg voor rauwe schijftoegang —
+// zelfs Apple's dd krijgt als uid 0 "Operation not permitted", want TCC kijkt
+// naar het proces. Dus geen sudo en geen verhoogde worker: één
+// autorisatie-dialoog per bewerking, en al het werk in dit proces (dus ook
+// live voortgang).
 //
 // FIND leunt op de console-poort die élke meegeleverde config aanzet
 // (hopos.console=5555): één TCP-connect levert de identificatie én de naam,
@@ -22,7 +26,9 @@
 // platform-neutraal.
 //
 //	go build . && ./hop-imager
-//	./hop-imager -scan      (dezelfde zoeker zonder GUI)
+//	./hop-imager -scan            (dezelfde zoeker zonder GUI)
+//	./hop-imager -disks           (wat de tool als doel ziet)
+//	./hop-imager -probe /dev/rX   (kan ik dit device lezen? zit er een venster in?)
 package main
 
 import (
@@ -108,12 +114,15 @@ type ui struct {
 	cancel   func()
 
 	// gedeeld
-	cardSels  []*widget.Select
-	devices   map[string]disk.Device
-	progress  *widget.ProgressBar
-	status    *widget.Label
-	logScroll *container.Scroll
-	logLines  []string
+	tabs       *container.AppTabs
+	pendingCfg string // doel waarvan de config klaarstaat om te laden
+	cardSels   []*widget.Select
+	devices    map[string]disk.Device
+	progress   *widget.ProgressBar
+	status     *widget.Label // de volledige console (groeit in de BURN-tab)
+	lastLbl    *widget.Label // één regel, altijd zichtbaar onder elke tab
+	logScroll  *container.Scroll
+	logLines   []string
 }
 
 // --- tags: outline-pills ("mooi cirkeltje er omheen", Derek 06-08) -----------
@@ -175,15 +184,39 @@ func logoArt() fyne.CanvasObject {
 }
 
 func main() {
-	// Worker-modus (verhoogd, zie internal/priv): geen GUI, doe de bewerking
-	// en print het resultaat.
-	if slices.Contains(os.Args[1:], "-op") {
-		out, err := runOp(os.Args[1:])
+	// -disks: wat de tool als doelkaart ziet. Diagnose ("waarom staat mijn
+	// kaart er niet bij?") én het meetinstrument voor internal/disk.
+	if slices.Contains(os.Args[1:], "-disks") {
+		devs, err := disk.List()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Print(out)
+		for _, d := range devs {
+			fmt.Printf("%-40s  %s  %d bytes\n", d.Desc, d.RawPath, d.Size)
+		}
+		fmt.Fprintf(os.Stderr, "%d card(s)/stick(s)\n", len(devs))
+		return
+	}
+
+	// -probe <device>: kan de tool dit device überhaupt lezen, en zit er een
+	// config-venster in? Het meetinstrument voor de rechten-weg (authopen).
+	if i := slices.Index(os.Args[1:], "-probe"); i >= 0 && len(os.Args) > i+2 {
+		dev := os.Args[i+2]
+		f, err := priv.OpenDevice(dev, false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "open:", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		w, err := cfgwin.Find(f)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "window:", err)
+			os.Exit(1)
+		}
+		c, _ := cfgwin.Content(f, w)
+		fmt.Printf("window at %#x, %d KB, config %d bytes\n", w.Off, w.Size>>10, w.ContentLen)
+		fmt.Println(strings.SplitN(string(c), "\n", 2)[0])
 		return
 	}
 
@@ -212,7 +245,10 @@ func main() {
 	u.status.Wrapping = fyne.TextWrapWord
 	u.status.TextStyle = fyne.TextStyle{Monospace: true}
 	u.logScroll = container.NewVScroll(u.status)
-	u.logScroll.SetMinSize(fyne.NewSize(0, 130))
+	// Geen vaste hoogte: de console groeit mee in de BURN-tab (daar is hij het
+	// hoofdvenster van wat er gebeurt). Zie burnTab.
+	u.lastLbl = widget.NewLabel("")
+	u.lastLbl.Truncation = fyne.TextTruncateEllipsis
 
 	refreshBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), u.fetchReleases)
 	header := container.NewBorder(nil, nil, nil, container.NewVBox(refreshBtn),
@@ -224,10 +260,19 @@ func main() {
 		container.NewTabItemWithIcon("Find", theme.SearchIcon(), u.findTab()),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
+	u.tabs = tabs
+	// Naar CONFIGURE overstappen met een doel geselecteerd = de config laden.
+	// Zo blijft "kiezen is zien" waar, zonder een prompt op een andere tab.
+	tabs.OnSelected = func(ti *container.TabItem) {
+		if ti.Text == "Configure" && u.pendingCfg != "" && u.pendingCfg != u.cfgTarget {
+			target := u.pendingCfg
+			u.run(func() { u.loadConfig(target) })
+		}
+	}
 
 	u.win.SetContent(container.NewBorder(
 		container.NewVBox(header, widget.NewSeparator()),
-		container.NewVBox(u.progress, u.logScroll),
+		container.NewVBox(u.progress, u.lastLbl),
 		nil, nil,
 		tabs,
 	))
@@ -236,6 +281,7 @@ func main() {
 	u.log("Welcome. Loading the latest release…")
 	u.fetchReleases()
 	u.refreshDevices()
+	u.watchDevices()
 	u.win.ShowAndRun()
 }
 
@@ -269,34 +315,56 @@ func (u *ui) burnTab() fyne.CanvasObject {
 	chosenRow := container.NewBorder(nil, nil, widget.NewIcon(theme.FileIcon()),
 		container.NewHBox(u.imageTags, localBtn), u.imageLbl)
 
-	cardRow := u.cardRow()
+	cardRow := u.targetRow(nil, nil)
 
 	writeBtn := widget.NewButtonWithIcon("Write", theme.MediaPlayIcon(), u.writeCard)
 	writeBtn.Importance = widget.HighImportance
 	checkBtn := widget.NewButtonWithIcon("Verify", theme.ConfirmIcon(), u.checkCard)
 
-	return container.NewVBox(
-		section("Type"), flavorRow,
-		section("Device"), u.boardBox,
-		chosenRow,
-		widget.NewSeparator(),
-		cardRow,
-		container.NewGridWithColumns(2, writeBtn, checkBtn),
+	// De console is hier het groeiende deel: in BURN wil je zien wat er
+	// gebeurt, in CONFIGURE is dat het tekstveld en in FIND de lijst (Derek
+	// 06-08). Border met center = console doet precies dat.
+	return container.NewBorder(
+		container.NewVBox(
+			section("Type"), flavorRow,
+			section("Device"), u.boardBox,
+			chosenRow,
+			widget.NewSeparator(),
+			cardRow,
+			container.NewGridWithColumns(2, writeBtn, checkBtn),
+			section("Console"),
+		),
+		nil, nil, nil,
+		u.logScroll,
 	)
 }
 
-// cardRow bouwt een kaart-kiezer. Elke tab die er een nodig heeft krijgt zijn
-// eigen widget (Fyne deelt geen objecten tussen containers); refreshDevices
-// vult ze allemaal.
-func (u *ui) cardRow() fyne.CanvasObject {
+// targetRow bouwt een doel-kiezer: kaart óf USB-stick (een Pi boot ook van
+// USB, dus het heet TARGET en niet "target card" — Derek 06-08). Elke tab die
+// er een nodig heeft krijgt zijn eigen widget (Fyne deelt geen objecten tussen
+// containers); refreshDevices vult ze allemaal. extra hangt rechts bij (de
+// CONFIGURE-tab zet daar zijn image-knop), onChange vuurt bij elke keuze —
+// ook bij de automatische keuze als er precies één doel is.
+func (u *ui) targetRow(extra fyne.CanvasObject, onChange func(disk.Device)) fyne.CanvasObject {
 	sel := widget.NewSelect(nil, nil)
-	sel.PlaceHolder = "insert a card and pick it here…"
+	sel.PlaceHolder = "insert a card or stick — it shows up by itself…"
+	if onChange != nil {
+		sel.OnChanged = func(desc string) {
+			if d, ok := u.devices[desc]; ok {
+				onChange(d)
+			}
+		}
+	}
 	u.cardSels = append(u.cardSels, sel)
 	rescan := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), u.refreshDevices)
 	eject := widget.NewButtonWithIcon("Eject", theme.LogoutIcon(), func() {
 		u.withDevice(func(d disk.Device) { u.run(func() { u.eject(d) }) })
 	})
-	return container.NewBorder(nil, nil, section("Target card"), container.NewHBox(rescan, eject), sel)
+	right := container.NewHBox(rescan, eject)
+	if extra != nil {
+		right = container.NewHBox(extra, rescan, eject)
+	}
+	return container.NewBorder(nil, nil, section("Target"), right, sel)
 }
 
 func (u *ui) writeCard() {
@@ -325,7 +393,7 @@ func (u *ui) writeCard() {
 					}
 					u.log(fmt.Sprintf("Writing %d MB to %s (unmounting first)…", st.Size()>>20, d.RawPath))
 					start := time.Now()
-					if _, err := u.privOp([]string{"-op", "write", "-image", u.imagePath, "-dev", d.RawPath}, true); err != nil {
+					if err := opWrite(u.imagePath, d.RawPath, u.progressCB()); err != nil {
 						u.fail(err)
 						return
 					}
@@ -343,19 +411,15 @@ func (u *ui) checkCard() {
 	u.withDevice(func(d disk.Device) {
 		u.run(func() {
 			u.log("Verifying — reading the card back and comparing…")
-			out, err := u.privOp([]string{"-op", "check", "-image", u.imagePath, "-dev", d.RawPath}, true)
+			ok, sum, err := opCheck(u.imagePath, d.RawPath, u.progressCB())
 			if err != nil {
 				u.fail(err)
 				return
 			}
-			f := strings.Fields(out)
-			switch {
-			case len(f) > 1 && f[0] == "MATCH":
-				u.log("VERIFY OK — the card matches the image byte for byte (sha256 " + f[1][:12] + "…).")
-			case len(f) > 0 && f[0] == "MISMATCH":
-				u.log("VERIFY FAILED — the card does NOT match the image. Write it again.")
-			default:
-				u.log("Verify: unexpected answer " + strings.TrimSpace(out))
+			if ok {
+				u.log("VERIFY OK — the target matches the image byte for byte (sha256 " + sum[:12] + "…).")
+			} else {
+				u.log("VERIFY FAILED — the target does NOT match the image. Write it again.")
 			}
 		})
 	})
@@ -364,12 +428,11 @@ func (u *ui) checkCard() {
 // --- CONFIGURE ----------------------------------------------------------------
 
 func (u *ui) configureTab() fyne.CanvasObject {
-	cardRow := u.cardRow()
-	loadCard := widget.NewButtonWithIcon("Load from card", theme.DownloadIcon(), func() {
-		u.withDevice(func(d disk.Device) { u.run(func() { u.loadConfig(d.RawPath) }) })
-	})
-	loadCard.Importance = widget.HighImportance
-	loadImg := widget.NewButtonWithIcon("Load from image file…", theme.FileIcon(), func() {
+	// Geen laad-knop: een doel kiezen ís het verzoek om zijn config te zien
+	// (Derek 06-08: "zodra je hebt geselecteerd zie je de config, geen button
+	// presses nodig"). De image-knop staat ernaast, want een image-bestand
+	// bewerken is de uitzondering, niet de regel.
+	loadImg := widget.NewButtonWithIcon("Image file…", theme.FileIcon(), func() {
 		if u.imagePath != "" {
 			u.run(func() { u.loadConfig(u.imagePath) })
 			return
@@ -385,6 +448,7 @@ func (u *ui) configureTab() fyne.CanvasObject {
 		fd.SetFilter(storage.NewExtensionFileFilter([]string{".img"}))
 		fd.Show()
 	})
+	cardRow := u.targetRow(loadImg, u.targetChosen)
 
 	u.cfgLbl = widget.NewLabel("nothing loaded")
 	u.cfgLbl.Truncation = fyne.TextTruncateEllipsis
@@ -402,7 +466,6 @@ func (u *ui) configureTab() fyne.CanvasObject {
 	return container.NewBorder(
 		container.NewVBox(
 			cardRow,
-			container.NewGridWithColumns(2, loadCard, loadImg),
 			container.NewBorder(nil, nil, widget.NewIcon(theme.StorageIcon()), u.cfgTags, u.cfgLbl),
 			hint,
 		),
@@ -412,15 +475,42 @@ func (u *ui) configureTab() fyne.CanvasObject {
 	)
 }
 
+// targetChosen: een doel kiezen ís het verzoek om zijn config te zien. Alleen
+// laden als de CONFIGURE-tab ook open staat — een raw kaart lezen vraagt
+// rechten, en een wachtwoordprompt uit de lucht laten vallen terwijl iemand op
+// BURN staat is niet vriendelijk. Anders wacht het doel tot je de tab opent.
+func (u *ui) targetChosen(d disk.Device) {
+	u.pendingCfg = u.cfgPathFor(d)
+	if u.onConfigureTab() {
+		u.run(func() { u.loadConfig(u.pendingCfg) })
+	}
+}
+
+// cfgPathFor kiest de goedkoopste weg naar de config van dit doel: het
+// gemounte bestand als het OS de partitie kent (geen rechten nodig, dus geen
+// prompt), anders het rauwe device (Radxa, LicheeRV — daar is raw de énige
+// weg). Dezelfde bytes, hetzelfde venster.
+func (u *ui) cfgPathFor(d disk.Device) string {
+	if p, ok := disk.MountedConfig(d); ok {
+		return p
+	}
+	return d.RawPath
+}
+
+func (u *ui) onConfigureTab() bool {
+	return u.tabs != nil && u.tabs.Selected() != nil && u.tabs.Selected().Text == "Configure"
+}
+
 func (u *ui) loadConfig(target string) {
-	out, err := u.privOp([]string{"-op", "cfgread", "-dev", target}, false)
+	content, win, err := opCfgRead(target)
 	if err != nil {
 		u.fail(err)
 		return
 	}
+	out := string(content)
 	u.cfgTarget = target
 	tag := pill("headless", colHeadless)
-	if isDesktop([]byte(out)) {
+	if isDesktop(content) {
 		tag = pill("desktop", colDesktop)
 	}
 	fyne.Do(func() {
@@ -431,7 +521,8 @@ func (u *ui) loadConfig(target string) {
 		u.cfgSave.SetText("Save to " + shortTarget(target))
 		u.cfgSave.Enable()
 	})
-	u.log(fmt.Sprintf("Config loaded from %s (%d bytes). Edit it and save.", target, len(out)))
+	u.log(fmt.Sprintf("Config loaded from %s — %d bytes in a %d KB window. Edit it and save.",
+		shortTarget(target), win.ContentLen, win.Size>>10))
 }
 
 func (u *ui) saveConfig() {
@@ -441,25 +532,13 @@ func (u *ui) saveConfig() {
 	}
 	target, text := u.cfgTarget, u.cfgEntry.Text
 	u.run(func() {
-		tmp, err := os.CreateTemp("", "hopos-*.cfg")
+		win, err := opCfgWrite(target, []byte(text))
 		if err != nil {
 			u.fail(err)
 			return
 		}
-		defer os.Remove(tmp.Name())
-		if _, err := tmp.WriteString(text); err != nil {
-			tmp.Close()
-			u.fail(err)
-			return
-		}
-		tmp.Close()
-		out, err := u.privOp([]string{"-op", "cfgwrite", "-dev", target, "-cfg", tmp.Name()}, false)
-		if err != nil {
-			u.fail(err)
-			return
-		}
-		u.log("Config saved — " + strings.TrimSpace(out))
-		u.log("The node reads it on the next boot. Eject the card and put it back.")
+		u.log(fmt.Sprintf("Config saved — %d bytes into the %d KB window at %#x.", len(text), win.Size>>10, win.Off))
+		u.log("The node reads it on the next boot. Eject the target and put it back.")
 		u.loadConfig(target) // terugleren: de tag volgt de nieuwe inhoud
 	})
 }
@@ -807,6 +886,25 @@ func isDesktop(cfg []byte) bool {
 
 // --- devices --------------------------------------------------------------------
 
+// watchDevices houdt de kaartlijst zelf bij: een kaart insteken hoort genoeg
+// te zijn (Derek 06-08: "iedereen wil gewoon dat ie zelf gevonden wordt, en
+// wat kost het nou"). Eén diskutil-aanroep per twee seconden, en alleen als de
+// lijst écht anders is gaan de selecties op het scherm om — anders zou de
+// keuze van de gebruiker onder zijn handen wegspringen.
+func (u *ui) watchDevices() {
+	go func() {
+		last := strings.Join(disk.IDs(), "|")
+		for range time.Tick(2 * time.Second) {
+			now := strings.Join(disk.IDs(), "|")
+			if now == last {
+				continue
+			}
+			last = now
+			u.refreshDevices()
+		}
+	}()
+}
+
 func (u *ui) refreshDevices() {
 	u.run(func() {
 		devs, err := disk.List()
@@ -824,13 +922,25 @@ func (u *ui) refreshDevices() {
 			for _, s := range u.cardSels {
 				sel := s.Selected
 				s.Options = names
-				if slices.Contains(names, sel) {
-					s.SetSelected(sel)
+				switch {
+				case slices.Contains(names, sel):
+					s.SetSelected(sel) // keuze van de gebruiker blijft staan
+				case len(names) == 1:
+					s.SetSelected(names[0]) // precies één kaart: die bedoel je
+				default:
+					s.ClearSelected()
 				}
 				s.Refresh()
 			}
 		})
-		u.log(fmt.Sprintf("Found %d external disk(s).", len(devs)))
+		switch len(devs) {
+		case 0:
+			u.log("No card or stick found — insert one and it shows up by itself.")
+		default:
+			for _, d := range devs {
+				u.log("Target: " + d.Desc)
+			}
+		}
 	})
 }
 
@@ -856,43 +966,6 @@ func (u *ui) eject(d disk.Device) {
 
 // --- rechten + helpers ----------------------------------------------------------
 
-// privOp voert een bewerking uit die het rauwe device raakt: zelf als we al
-// root zijn, anders via een verhoogde worker (systeem-wachtwoordprompt). Met
-// withProgress leest de GUI ondertussen het voortgangsbestand van de worker.
-func (u *ui) privOp(args []string, withProgress bool) (string, error) {
-	if withProgress {
-		tmp, err := os.CreateTemp("", "hopimg-*.prog")
-		if err != nil {
-			return "", err
-		}
-		pf := tmp.Name()
-		tmp.Close()
-		defer os.Remove(pf)
-		args = append(args, "-progress", pf)
-		stop := make(chan struct{})
-		defer close(stop)
-		go func() {
-			t := time.NewTicker(150 * time.Millisecond)
-			defer t.Stop()
-			for {
-				select {
-				case <-stop:
-					return
-				case <-t.C:
-					if d, total := priv.Progress(pf); total > 0 {
-						v := float64(d) / float64(total)
-						fyne.Do(func() { u.progress.SetValue(v) })
-					}
-				}
-			}
-		}()
-	}
-	if priv.IsRoot() {
-		return runOp(args)
-	}
-	return priv.Escalate(args)
-}
-
 // run draait werk buiten de UI-thread; alle schermupdates gaan via fyne.Do.
 func (u *ui) run(fn func()) { go fn() }
 
@@ -914,6 +987,7 @@ func (u *ui) log(s string) {
 		}
 		u.status.SetText(text)
 		u.logScroll.ScrollToBottom()
+		u.lastLbl.SetText(s)
 	})
 }
 
