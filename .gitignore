@@ -15,3 +15,6 @@
 /icon.iconset/
 /icon-sheet.png
 /hop-imager-macos-*.zip
+
+# Notarisatie-geheimen (app-specifiek wachtwoord) — NOOIT committen
+/.notary
