@@ -6,3 +6,6 @@
 
 # Voortgangsbestanden van een afgebroken verhoogde bewerking
 *.prog
+
+# De gebouwde app-bundle (make-app.sh)
+/HopOS Imager.app/

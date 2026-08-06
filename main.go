@@ -69,6 +69,10 @@ import (
 const blockedHint = "macOS needs to allow this app on the local network. Run it as the app bundle (./make-app.sh, then open \"HopOS Imager.app\") and approve the prompt, " +
 	"or enable it under System Settings → Privacy & Security → Local Network. A loose binary has no identity to hang that permission on, so it is refused silently."
 
+// version wordt bij het bouwen ingevuld (-ldflags "-X main.version=…"); zie
+// make-app.sh en .github/workflows/release.yml.
+var version = "dev"
+
 // bunny: Dereks origineel (2026-07-11) — hetzelfde logo dat elke node bij het
 // booten toont (metal/cmd/hopos/main.go), dus de tool en het glas matchen.
 const bunny = `   (\(\
@@ -293,11 +297,40 @@ func main() {
 	u.fetchReleases()
 	u.refreshDevices()
 	u.watchDevices()
+	u.demoMode()
 	u.win.ShowAndRun()
 }
 
+// demoMode zet een beginstand voor demo's en de README-screenshots:
+// HOPIMAGER_TAB kiest de tab, HOPIMAGER_IMAGE zet een image klaar (en dus ook
+// de config die CONFIGURE toont), en op de FIND-tab begint de scan meteen. Puur
+// een startstand — er zit geen gedrag achter dat de tool anders niet heeft.
+func (u *ui) demoMode() {
+	if p := os.Getenv("HOPIMAGER_IMAGE"); p != "" {
+		u.pendingCfg = p
+		u.run(func() { u.setImage(p) })
+	}
+	tab := os.Getenv("HOPIMAGER_TAB")
+	if tab == "" {
+		return
+	}
+	for _, ti := range u.tabs.Items {
+		if !strings.EqualFold(ti.Text, tab) {
+			continue
+		}
+		u.tabs.Select(ti)
+		if strings.EqualFold(tab, "find") {
+			u.run(func() { time.Sleep(300 * time.Millisecond); u.scanNetwork() })
+		}
+		if strings.EqualFold(tab, "configure") && u.pendingCfg != "" {
+			p := u.pendingCfg
+			u.run(func() { time.Sleep(300 * time.Millisecond); u.loadConfig(p) })
+		}
+	}
+}
+
 func subtitleText() fyne.CanvasObject {
-	sub := canvas.NewText("imager — burn · configure · find", hopMuted)
+	sub := canvas.NewText("imager "+version+" — burn · configure · find", hopMuted)
 	sub.TextStyle = fyne.TextStyle{Monospace: true}
 	sub.TextSize = 12
 	return container.NewCenter(sub)

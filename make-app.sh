@@ -18,9 +18,9 @@
 # Systeeminstellingen → Privacy en beveiliging → Lokaal netwerk.
 APP="HopOS Imager.app"
 ID="org.gethop.imager"
-VERSION="0.1.0"
+VERSION="${VERSION:-0.0.0-dev}"
 
-go build -o hop-imager .
+go build -trimpath -ldflags "-X main.version=$VERSION" -o hop-imager .
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
