@@ -36,6 +36,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -562,8 +563,14 @@ func (u *ui) findTab() fyne.CanvasObject {
 			name := widget.NewLabel("template")
 			name.Truncation = fyne.TextTruncateEllipsis
 			flavor, state := newTagPill(), newTagPill()
+			// Twee knoppen per node: het beeld van de node zelf (/kvm op
+			// poort 80) en hem toevoegen aan de web-GUI. Beide zijn gewone
+			// links — deze tool stuurt NOOIT een sleutel mee; die vult de
+			// gebruiker daar zelf in (Derek 06-08).
+			kvm := widget.NewButtonWithIcon("GUI", theme.ComputerIcon(), nil)
+			add := widget.NewButtonWithIcon("Add", theme.ContentAddIcon(), nil)
 			return container.NewBorder(nil, nil, nil,
-				container.NewHBox(state.wrap, flavor.wrap), name)
+				container.NewHBox(state.wrap, flavor.wrap, kvm, add), name)
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			row := o.(*fyne.Container)
@@ -578,6 +585,22 @@ func (u *ui) findTab() fyne.CanvasObject {
 				fc = colDesktop
 			}
 			setPillIn(right.Objects[1], n.Flavor, fc)
+
+			kvm := right.Objects[2].(*widget.Button)
+			kvm.OnTapped = func() { u.open("http://" + n.IP + "/kvm") }
+			// Een headless node serveert geen /kvm: dan is de knop er wel,
+			// maar dood — verbergen zou lezen als "deze node kan het niet",
+			// en dat is een configuratiekeuze, geen eigenschap.
+			if n.Flavor == "desktop" {
+				kvm.Enable()
+			} else {
+				kvm.Disable()
+			}
+			add := right.Objects[3].(*widget.Button)
+			add.OnTapped = func() {
+				q := url.Values{"name": {n.Name}, "ip": {n.IP}}
+				u.open("https://gui.gethop.org/?" + q.Encode())
+			}
 		})
 	u.nodeList.OnSelected = func(i widget.ListItemID) {
 		if i >= 0 && i < len(u.nodes) {
@@ -586,7 +609,7 @@ func (u *ui) findTab() fyne.CanvasObject {
 		u.nodeList.UnselectAll()
 	}
 
-	hint := canvas.NewText(fmt.Sprintf("every HopOS node serves its console on tcp/%d — that is how we recognise it, and how you read its boot log", find.DefaultPort), hopMuted)
+	hint := canvas.NewText(fmt.Sprintf("recognised by the console on tcp/%d — click a row to read its boot log. GUI opens the node's own screen, Add hands name and address to gui.gethop.org. No API key is ever sent from here.", find.DefaultPort), hopMuted)
 	hint.TextSize = 11
 
 	return container.NewBorder(
@@ -965,6 +988,21 @@ func (u *ui) eject(d disk.Device) {
 }
 
 // --- rechten + helpers ----------------------------------------------------------
+
+// open zet een link in de browser. Alleen adres en naam gaan mee — nooit een
+// sleutel: die hoort thuis bij de gebruiker, niet in een URL van deze tool.
+func (u *ui) open(raw string) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		u.fail(err)
+		return
+	}
+	if err := fyne.CurrentApp().OpenURL(parsed); err != nil {
+		u.fail(err)
+		return
+	}
+	u.log("Opened " + raw)
+}
 
 // run draait werk buiten de UI-thread; alle schermupdates gaan via fyne.Do.
 func (u *ui) run(fn func()) { go fn() }
