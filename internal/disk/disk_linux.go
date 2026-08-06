@@ -87,6 +87,15 @@ func IDs() []string {
 	return ids
 }
 
+// Prepare maakt een doel klaar voor raw I/O: partities eraf, en niets meer te
+// doen bij het sluiten (zie de macOS-variant voor het waarom van deze vorm).
+func Prepare(raw string) (func(), error) {
+	if err := UnmountPath(raw); err != nil {
+		return nil, err
+	}
+	return func() {}, nil
+}
+
 // Unmount koppelt elke partitie van de schijf los. udisksctl eerst: dat mag een
 // gewone gebruiker via polkit, en het is de weg die de desktop zelf gebruikt.
 // Lukt dat niet, dan umount (root of een fstab-regel met user).

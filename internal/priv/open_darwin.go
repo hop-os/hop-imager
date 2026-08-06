@@ -91,3 +91,8 @@ func OpenDevice(path string, write bool) (*os.File, error) {
 	}
 	return nil, fmt.Errorf("authopen returned no file descriptor for %s", path)
 }
+
+// NeedsElevation/Elevate bestaan alleen voor Windows; op macOS vraagt authopen
+// per bewerking om toestemming en hoeft het proces nooit verhoogd te draaien.
+func NeedsElevation() bool { return false }
+func Elevate() error       { return nil }

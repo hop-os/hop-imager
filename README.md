@@ -150,17 +150,25 @@ Command line, no GUI needed:
 
 ## Platform support
 
-| | BURN | CONFIGURE | FIND |
-|---|---|---|---|
-| macOS | yes | yes | yes (run the app bundle) |
-| Linux | yes, as root | yes, as root | yes |
-| Windows | not yet | image files only | yes |
+| | BURN | CONFIGURE | FIND | what it needs |
+|---|---|---|---|---|
+| macOS | yes | yes | yes | run the **app bundle** (local-network permission) |
+| Linux | yes | yes | yes | root: `sudo ./hop-imager`, or the `disk` group |
+| Windows | yes | yes | yes | administrator (the app offers to restart elevated) |
 
-Windows is the one still waiting: opening `\\.\PhysicalDriveN` needs a
-`FSCTL_LOCK_VOLUME`/`DISMOUNT_VOLUME` dance per volume on top of UAC, and that
-deserves to be written with a Windows machine next to it rather than guessed.
-Everything above the device layer is already platform-neutral — it is one file
-(`internal/disk`) plus raw open in `internal/priv`.
+Each platform reaches its devices its own way, and every one of those ways is a
+constraint the operating system imposes rather than a style choice:
+
+- **macOS** — `diskutil` for enumeration and unmounting, `authopen` for the raw
+  descriptor (being root is not enough; TCC looks at the process).
+- **Linux** — `lsblk` for enumeration, `udisksctl`/`umount` for unmounting, and
+  plain `open` as root.
+- **Windows** — WMI for enumeration, and before a single byte goes to
+  `\\.\PhysicalDriveN` every volume on that disk is opened, `FSCTL_LOCK_VOLUME`d
+  and `FSCTL_DISMOUNT_VOLUME`d, with those handles **held open for the whole
+  write** — otherwise Windows remounts the volume mid-flash and writes its own
+  filesystem over yours. Afterwards the locks are released and the disk is told
+  to re-read its partition table.
 
 ## Releases
 

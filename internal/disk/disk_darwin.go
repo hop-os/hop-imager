@@ -123,6 +123,17 @@ func UnmountPath(raw string) error {
 	return Unmount(Device{ID: id})
 }
 
+// Prepare maakt een doel klaar voor raw I/O en geeft terug wat er ná het
+// sluiten moet gebeuren. Op macOS is dat simpel — ontkoppelen en klaar; op
+// Windows moeten de volume-sloten vastgehouden worden zolang je schrijft, en
+// daar is deze vorm voor.
+func Prepare(raw string) (func(), error) {
+	if err := UnmountPath(raw); err != nil {
+		return nil, err
+	}
+	return func() {}, nil
+}
+
 // Unmount koppelt alle volumes van de schijf los — verplicht vóór een raw
 // write: macOS weigert te schrijven naar een disk met gemounte volumes.
 func Unmount(d Device) error {

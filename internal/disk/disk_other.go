@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package disk
 
@@ -14,7 +14,8 @@ func List() ([]Device, error) {
 	return nil, fmt.Errorf("device listing is not implemented on this OS yet (macOS first)")
 }
 
-func IDs() []string                { return nil }
-func Unmount(d Device) error       { return nil }
-func Eject(d Device) error         { return nil }
-func UnmountPath(raw string) error { return nil }
+func IDs() []string                      { return nil }
+func Prepare(raw string) (func(), error) { return func() {}, nil }
+func Unmount(d Device) error             { return nil }
+func Eject(d Device) error               { return nil }
+func UnmountPath(raw string) error       { return nil }

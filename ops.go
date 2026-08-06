@@ -42,19 +42,47 @@ func isDevice(path string) bool { return strings.HasPrefix(path, "/dev/") }
 // zodat de test de hele beweging op een bestand kan naspelen.
 var keepEligible = isDevice
 
-// openTarget opent een doel: een device via authopen, een bestand gewoon.
-func openTarget(path string, write bool) (*os.File, error) {
+// target is een geopend doel plus wat er bij het sluiten nog moet gebeuren.
+// Dat laatste bestaat om Windows: daar moeten de volume-sloten vastgehouden
+// worden zolang er geschreven wordt, en pas ná het sluiten van het device weer
+// los (internal/disk.Prepare).
+type target struct {
+	*os.File
+	release func()
+}
+
+func (t *target) Close() error {
+	err := t.File.Close()
+	if t.release != nil {
+		t.release()
+	}
+	return err
+}
+
+// openTarget opent een doel: een device (met de voorbereiding die dat platform
+// eist) of een gewoon image-bestand.
+func openTarget(path string, write bool) (*target, error) {
 	if !isDevice(path) {
 		flag := os.O_RDONLY
 		if write {
 			flag = os.O_RDWR
 		}
-		return os.OpenFile(path, flag, 0)
+		f, err := os.OpenFile(path, flag, 0)
+		if err != nil {
+			return nil, err
+		}
+		return &target{File: f}, nil
 	}
-	if err := disk.UnmountPath(path); err != nil {
+	release, err := disk.Prepare(path)
+	if err != nil {
 		return nil, err
 	}
-	return priv.OpenDevice(path, write)
+	f, err := priv.OpenDevice(path, write)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	return &target{File: f, release: release}, nil
 }
 
 // burnResult is wat één schrijfbeweging heeft opgeleverd: is het image
@@ -111,8 +139,8 @@ func opWrite(imagePath, target string, keepConfig bool, phase func(string), prog
 	var kept []byte
 	if keepConfig && keepEligible(target) {
 		phase("reading the config that is on the card")
-		if w, ferr := cfgwin.Find(out); ferr == nil {
-			if c, cerr := cfgwin.Content(out, w); cerr == nil && len(c) > 0 {
+		if w, ferr := cfgwin.Find(out.File); ferr == nil {
+			if c, cerr := cfgwin.Content(out.File, w); cerr == nil && len(c) > 0 {
 				kept = c
 				res.KeptNode = cfgValue(c, "hopos.node")
 				res.Backup, _ = saveKept(c, res.KeptNode)
@@ -128,7 +156,22 @@ func opWrite(imagePath, target string, keepConfig bool, phase func(string), prog
 	for {
 		n, rerr := img.Read(buf)
 		if n > 0 {
-			if _, werr := out.Write(buf[:n]); werr != nil {
+			// Een raw device neemt alleen HELE SECTOREN aan (macOS geeft
+			// anders EINVAL, Windows ERROR_INVALID_PARAMETER). De staart van
+			// een image is zelden een 512-voud, dus die padden we met nullen —
+			// een paar bytes voorbij het image-einde raakt niemand, en de
+			// verificatie vergelijkt toch precies de image-lengte.
+			w := n
+			if isDevice(target) {
+				if rest := w % sectorSize; rest != 0 {
+					pad := sectorSize - rest
+					for i := w; i < w+pad; i++ {
+						buf[i] = 0
+					}
+					w += pad
+				}
+			}
+			if _, werr := out.Write(buf[:w]); werr != nil {
 				return res, werr
 			}
 			done += int64(n)
@@ -142,13 +185,13 @@ func opWrite(imagePath, target string, keepConfig bool, phase func(string), prog
 		}
 	}
 	// Tolerante sync: een raw device kan geen fsync (zie cfgwin.Sync).
-	if err := cfgwin.Sync(out); err != nil {
+	if err := cfgwin.Sync(out.File); err != nil {
 		return res, err
 	}
 
 	// 4. Verifiëren.
 	phase("verifying")
-	at, err := compare(img, out, st.Size(), prog)
+	at, err := compare(img, out.File, st.Size(), prog)
 	if err != nil {
 		return res, err
 	}
@@ -176,7 +219,7 @@ func opWrite(imagePath, target string, keepConfig bool, phase func(string), prog
 			res.Warning = "your config seeds a desktop, but this is a headless image — the display job will never get the framebuffer. Switch to the desktop image, or drop those jobs in CONFIGURE."
 		}
 	}
-	if err := cfgwin.Replace(out, w, kept); err != nil {
+	if err := cfgwin.Replace(out.File, w, kept); err != nil {
 		res.Warning = "your config did not fit the new window (" + err.Error() + "), so the card carries the image default. Your config is safe in " + res.Backup
 		return res, nil
 	}
@@ -322,11 +365,11 @@ func opCfgRead(target string) ([]byte, cfgwin.Window, error) {
 		return nil, cfgwin.Window{}, err
 	}
 	defer f.Close()
-	w, err := cfgwin.Find(f)
+	w, err := cfgwin.Find(f.File)
 	if err != nil {
 		return nil, cfgwin.Window{}, err
 	}
-	b, err := cfgwin.Content(f, w)
+	b, err := cfgwin.Content(f.File, w)
 	return b, w, err
 }
 
@@ -338,9 +381,9 @@ func opCfgWrite(target string, content []byte) (cfgwin.Window, error) {
 		return cfgwin.Window{}, err
 	}
 	defer f.Close()
-	w, err := cfgwin.Find(f)
+	w, err := cfgwin.Find(f.File)
 	if err != nil {
 		return cfgwin.Window{}, err
 	}
-	return w, cfgwin.Replace(f, w, content)
+	return w, cfgwin.Replace(f.File, w, content)
 }

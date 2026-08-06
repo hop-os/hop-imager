@@ -427,6 +427,26 @@ func (u *ui) writeCard() {
 		u.log("Pick an image first.")
 		return
 	}
+	// Windows: een raw write naar een fysieke schijf vraagt beheerdersrechten,
+	// en die kan een proces niet zelf worden — het moet opnieuw starten. Dus
+	// vragen we het op het moment dat het nodig is, niet als zeurpiet bij het
+	// opstarten. Op macOS en Linux is dit een no-op (authopen resp. sudo).
+	if priv.NeedsElevation() {
+		dialog.ShowConfirm("Administrator rights needed",
+			"Windows only lets an administrator write directly to a card.\n\nRestart HopOS Imager as administrator?",
+			func(yes bool) {
+				if !yes {
+					u.log("Not restarted — writing a card needs administrator rights on Windows.")
+					return
+				}
+				if err := priv.Elevate(); err != nil {
+					u.fail(err)
+					return
+				}
+				fyne.CurrentApp().Quit()
+			}, u.win)
+		return
+	}
 	u.withDevice(func(d disk.Device) {
 		dialog.ShowConfirm("Write image",
 			fmt.Sprintf("This ERASES ALL DATA on\n%s\n\nand writes\n%s\n\nContinue?", d.Desc, filepath.Base(u.imagePath)),
