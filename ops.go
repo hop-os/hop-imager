@@ -103,29 +103,6 @@ func opWrite(imagePath, target string, prog func(done, total int64)) (mismatchAt
 	return compare(img, out, st.Size(), prog)
 }
 
-// opCheck is de losse verificatie: het doel terugleren en vergelijken. Let op
-// het verschil met de verificatie ín opWrite — hier kan het systeem de kaart
-// intussen hebben aangeraakt (zie de uitleg daar), dus geeft deze functie de
-// EERSTE afwijkende byte terug in plaats van alleen een oordeel. Ligt die in de
-// eerste megabytes, dan is het bijna altijd macOS-metadata en niet je flash.
-func opCheck(imagePath, target string, prog func(done, total int64)) (mismatchAt int64, err error) {
-	img, err := os.Open(imagePath)
-	if err != nil {
-		return 0, err
-	}
-	defer img.Close()
-	st, err := img.Stat()
-	if err != nil {
-		return 0, err
-	}
-	dev, err := openTarget(target, false)
-	if err != nil {
-		return 0, err
-	}
-	defer dev.Close()
-	return compare(img, dev, st.Size(), prog)
-}
-
 // compare vergelijkt n bytes van het image met het doel en geeft de eerste
 // afwijkende byte terug (-1 = gelijk).
 //

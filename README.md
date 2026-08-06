@@ -16,8 +16,11 @@ tabs, no terminal.
 **BURN** — picks up the latest HopOS release from GitHub, downloads the card
 image for your board and writes it. Choose the **type** first (Desktop, which
 boots into the GUI, or Headless, which is API + network console only), then
-your **board**. *Verify* reads the card back and compares it to the image byte
-for byte.
+your **board**. Writing always verifies: the card is read back and compared to
+the image byte for byte, on the same open device, before anything can mount it
+— which is the only moment the answer means something. (Verify later and you
+are comparing against bytes macOS wrote itself the moment it mounted the fresh
+card.)
 
 **CONFIGURE** — edits the node config on a card that is **already written**.
 That is the point: configuring is something you do afterwards, as often as you

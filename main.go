@@ -328,9 +328,12 @@ func (u *ui) burnTab() fyne.CanvasObject {
 
 	cardRow := u.targetRow(nil, nil)
 
+	// Eén knop: schrijven ís schrijven-en-verifiëren. Een losse "verify"
+	// bestond ook en die is weg (Derek 06-08) — hij kon niets zinnigs meer
+	// zeggen zodra macOS de verse kaart had gemount en er zijn eigen metadata
+	// in had geschreven, en de verificatie die telt zit al in de write.
 	writeBtn := widget.NewButtonWithIcon("Write + verify", theme.MediaPlayIcon(), u.writeCard)
 	writeBtn.Importance = widget.HighImportance
-	checkBtn := widget.NewButtonWithIcon("Verify again", theme.ConfirmIcon(), u.checkCard)
 
 	// De console is hier het groeiende deel: in BURN wil je zien wat er
 	// gebeurt, in CONFIGURE is dat het tekstveld en in FIND de lijst (Derek
@@ -342,7 +345,7 @@ func (u *ui) burnTab() fyne.CanvasObject {
 			chosenRow,
 			widget.NewSeparator(),
 			cardRow,
-			container.NewGridWithColumns(2, writeBtn, checkBtn),
+			writeBtn,
 			section("Console"),
 		),
 		nil, nil, nil,
@@ -417,33 +420,6 @@ func (u *ui) writeCard() {
 					}
 				})
 			}, u.win)
-	})
-}
-
-func (u *ui) checkCard() {
-	if u.imagePath == "" {
-		u.log("Pick an image first.")
-		return
-	}
-	u.withDevice(func(d disk.Device) {
-		u.run(func() {
-			u.log("Verifying — reading the card back and comparing…")
-			at, err := opCheck(u.imagePath, d.RawPath, u.progressCB())
-			if err != nil {
-				u.fail(err)
-				return
-			}
-			switch {
-			case at < 0:
-				u.log("VERIFY OK — the target matches the image byte for byte.")
-			case at < 64<<20:
-				// Eerlijk zijn over de waarschijnlijkste oorzaak: macOS mount
-				// een verse kaart en schrijft er zijn eigen metadata in.
-				u.log(fmt.Sprintf("VERIFY: differs at byte %#x — that is inside the filesystem area, so this is almost certainly macOS writing its own metadata (Spotlight, .fseventsd) after mounting the card. Write already verifies itself; that check is the one that counts.", at))
-			default:
-				u.log(fmt.Sprintf("VERIFY FAILED — differs at byte %#x, past the filesystem area. Write it again.", at))
-			}
-		})
 	})
 }
 
