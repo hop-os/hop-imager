@@ -1,0 +1,8 @@
+# De gebouwde tool (go build .)
+/hop-imager
+
+# macOS
+.DS_Store
+
+# Voortgangsbestanden van een afgebroken verhoogde bewerking
+*.prog
