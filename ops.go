@@ -82,7 +82,8 @@ func opWrite(imagePath, target string, prog func(done, total int64)) error {
 			return rerr
 		}
 	}
-	return out.Sync()
+	// Tolerante sync: een raw device kan geen fsync (zie cfgwin.Sync).
+	return cfgwin.Sync(out)
 }
 
 // opCheck leest het doel terug en vergelijkt met het image, byte voor byte

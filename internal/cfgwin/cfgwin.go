@@ -15,10 +15,12 @@ package cfgwin
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
+	"syscall"
 )
 
 const (
@@ -81,7 +83,29 @@ func Replace(f *os.File, w Window, content []byte) error {
 	if err := fipFix(f, w.Off, w.Size); err != nil {
 		return err
 	}
-	return f.Sync()
+	return Sync(f)
+}
+
+// Sync dwingt de bytes naar het medium en TOLEREERT dat een rauw device dat
+// niet kan. /dev/rdiskN is een character device; fsync geeft daar ENOTTY
+// ("inappropriate ioctl for device") — gemeten ná een geslaagde flash op
+// Dereks Mac, 06-08. Dat is geen mislukking maar "niet van toepassing":
+// schrijven naar het raw device gaat ongebufferd naar de kaart, de sync is de
+// gordel voor gewone bestanden. Een fout hier als fout melden zou dus een
+// geslaagde flash er als mislukt laten uitzien.
+func Sync(f *os.File) error {
+	err := f.Sync()
+	if err == nil {
+		return nil
+	}
+	var e syscall.Errno
+	if errors.As(err, &e) {
+		switch e {
+		case syscall.ENOTTY, syscall.EINVAL, syscall.ENODEV, syscall.ENOTSUP:
+			return nil
+		}
+	}
+	return err
 }
 
 // Strip haalt een eventueel bestaand venster van een config af (idempotentie:

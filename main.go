@@ -563,14 +563,14 @@ func (u *ui) findTab() fyne.CanvasObject {
 			name := widget.NewLabel("template")
 			name.Truncation = fyne.TextTruncateEllipsis
 			flavor, state := newTagPill(), newTagPill()
-			// Twee knoppen per node: het beeld van de node zelf (/kvm op
-			// poort 80) en hem toevoegen aan de web-GUI. Beide zijn gewone
-			// links — deze tool stuurt NOOIT een sleutel mee; die vult de
-			// gebruiker daar zelf in (Derek 06-08).
+			// Twee knoppen per node: GUI = het beeld van de node zelf (/kvm
+			// op poort 80), Manage = de node beheren op gui.gethop.org.
+			// Beide zijn gewone links — deze tool stuurt NOOIT een sleutel
+			// mee; die vult de gebruiker daar zelf in (Derek 06-08).
 			kvm := widget.NewButtonWithIcon("GUI", theme.ComputerIcon(), nil)
-			add := widget.NewButtonWithIcon("Add", theme.ContentAddIcon(), nil)
+			manage := widget.NewButtonWithIcon("Manage", theme.SettingsIcon(), nil)
 			return container.NewBorder(nil, nil, nil,
-				container.NewHBox(state.wrap, flavor.wrap, kvm, add), name)
+				container.NewHBox(state.wrap, flavor.wrap, kvm, manage), name)
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			row := o.(*fyne.Container)
@@ -596,8 +596,8 @@ func (u *ui) findTab() fyne.CanvasObject {
 			} else {
 				kvm.Disable()
 			}
-			add := right.Objects[3].(*widget.Button)
-			add.OnTapped = func() {
+			manage := right.Objects[3].(*widget.Button)
+			manage.OnTapped = func() {
 				q := url.Values{"name": {n.Name}, "ip": {n.IP}}
 				u.open("https://gui.gethop.org/?" + q.Encode())
 			}
@@ -609,7 +609,7 @@ func (u *ui) findTab() fyne.CanvasObject {
 		u.nodeList.UnselectAll()
 	}
 
-	hint := canvas.NewText(fmt.Sprintf("recognised by the console on tcp/%d — click a row to read its boot log. GUI opens the node's own screen, Add hands name and address to gui.gethop.org. No API key is ever sent from here.", find.DefaultPort), hopMuted)
+	hint := canvas.NewText(fmt.Sprintf("recognised by the console on tcp/%d — click a row to read its boot log. GUI opens the node's own screen, Manage hands name and address to gui.gethop.org. No API key is ever sent from here.", find.DefaultPort), hopMuted)
 	hint.TextSize = 11
 
 	return container.NewBorder(
