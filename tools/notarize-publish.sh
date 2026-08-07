@@ -31,6 +31,11 @@ if ! spctl -a -vvv "HopOS Imager.app" 2>&1 | grep -q accepted; then
 	exit 1
 fi
 
+# De release kan er nog niet zijn: CI maakt hem, en die kan later klaar zijn dan
+# de notarisatie hier (die duurt minuten). Dan maken we hem zelf aan in plaats
+# van te falen op "release not found".
+gh release view "$TAG" >/dev/null 2>&1 ||
+	gh release create "$TAG" --title "hop-imager $TAG" --notes-file .github/release-notes.md
 gh release upload "$TAG" --clobber "$ASSET"
 gh release upload rolling-release --clobber "$ASSET"
 
