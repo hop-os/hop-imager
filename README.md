@@ -64,6 +64,13 @@ as often as you like: node name, cluster, API key, console port, the jobs it
 should seed at boot. Select the target and **the config appears** — no load
 button, no dialog. Edit, save, put the card back in the node.
 
+The config is coloured for what this format actually has, nothing more: section
+headers in phosphor, comments muted, keys blue, values white, JSON job lines
+with their strings and numbers apart — and **secrets in copper**, so a config
+open on your screen shows you where its keys are. `Edit` swaps the coloured view
+for a plain text field and back; the colours are redrawn when you are done, so a
+half-finished job line is visible immediately.
+
 It works on a card that no operating system can mount, and on a board whose
 config lives inside the kernel, because the tool never touches a filesystem —
 see the next section.

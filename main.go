@@ -123,6 +123,9 @@ type ui struct {
 
 	// CONFIGURE
 	cfgEntry  *widget.Entry
+	cfgGrid   *widget.TextGrid  // gekleurde weergave (highlight.go)
+	cfgView   *container.Scroll // de weergave, met scrollbalk
+	cfgEdit   *widget.Button    // wisselt tussen lezen en bewerken
 	cfgLbl    *widget.Label
 	cfgTags   *fyne.Container
 	cfgTarget string // /dev/rdiskN of een image-pad
@@ -541,6 +544,15 @@ func (u *ui) configureTab() fyne.CanvasObject {
 	u.cfgEntry = widget.NewMultiLineEntry()
 	u.cfgEntry.TextStyle = fyne.TextStyle{Monospace: true}
 	u.cfgEntry.SetPlaceHolder("load a config from a card or an image file")
+	u.cfgEntry.Hide()
+
+	// De gekleurde weergave is wat je standaard ziet; bewerken is een keuze.
+	// TextGrid kan per teken een kleur maar niet typen, en een Entry kan typen
+	// maar niet kleuren — dus wisselen we, in plaats van er een half editortje
+	// van te maken.
+	u.cfgGrid = widget.NewTextGrid()
+	u.cfgView = container.NewScroll(u.cfgGrid)
+	u.cfgEdit = widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), u.toggleEdit)
 	u.cfgSave = widget.NewButtonWithIcon("Save to card", theme.DocumentSaveIcon(), u.saveConfig)
 	u.cfgSave.Importance = widget.HighImportance
 	u.cfgSave.Disable()
@@ -551,12 +563,13 @@ func (u *ui) configureTab() fyne.CanvasObject {
 	return container.NewBorder(
 		container.NewVBox(
 			cardRow,
-			container.NewBorder(nil, nil, widget.NewIcon(theme.StorageIcon()), u.cfgTags, u.cfgLbl),
+			container.NewBorder(nil, nil, widget.NewIcon(theme.StorageIcon()),
+				container.NewHBox(u.cfgTags, u.cfgEdit), u.cfgLbl),
 			hint,
 		),
 		container.NewVBox(u.cfgSave),
 		nil, nil,
-		u.cfgEntry,
+		container.NewStack(u.cfgView, u.cfgEntry),
 	)
 }
 
@@ -582,6 +595,25 @@ func (u *ui) onConfigureTab() bool {
 	return u.tabs != nil && u.tabs.Selected() != nil && u.tabs.Selected().Text == "Configure"
 }
 
+// toggleEdit wisselt tussen de gekleurde weergave en het tekstveld. Bij
+// terugwisselen wordt opnieuw gekleurd, dus je ziet meteen wat je hebt getypt —
+// inclusief een onafgesloten string in een jobregel.
+func (u *ui) toggleEdit() {
+	if u.cfgEntry.Visible() {
+		highlight(u.cfgGrid, u.cfgEntry.Text)
+		u.cfgEntry.Hide()
+		u.cfgView.Show()
+		u.cfgEdit.SetText("Edit")
+		u.cfgEdit.SetIcon(theme.DocumentCreateIcon())
+		return
+	}
+	u.cfgView.Hide()
+	u.cfgEntry.Show()
+	u.cfgEntry.Refresh()
+	u.cfgEdit.SetText("Done")
+	u.cfgEdit.SetIcon(theme.ConfirmIcon())
+}
+
 func (u *ui) loadConfig(target string) {
 	content, win, err := opCfgRead(target)
 	if err != nil {
@@ -596,6 +628,11 @@ func (u *ui) loadConfig(target string) {
 	}
 	fyne.Do(func() {
 		u.cfgEntry.SetText(out)
+		highlight(u.cfgGrid, out)
+		u.cfgEntry.Hide()
+		u.cfgView.Show()
+		u.cfgEdit.SetText("Edit")
+		u.cfgEdit.SetIcon(theme.DocumentCreateIcon())
 		u.cfgLbl.SetText(target)
 		u.cfgTags.Objects = []fyne.CanvasObject{tag}
 		u.cfgTags.Refresh()
