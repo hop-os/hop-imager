@@ -3,9 +3,9 @@
 // regel-gebaseerd (`key=value`, `#` is commentaar — zie fw/bootcfg in HopOS), en
 // dat is met een handvol regels te lezen.
 //
-// Getekend met widget.TextGrid, dat Fyne zelf al meebrengt "for a text editor,
-// code preview or terminal emulator" — dus per teken een kleur zonder één extra
-// afhankelijkheid.
+// Dit bestand maakt geen plaatje maar een lijst SEGMENTEN: stukjes tekst met
+// een kleurnaam. Die gaan in een widget.RichText die precies onder het
+// tekstveld ligt (editor.go), zodat de kleuren er zijn terwijl je typt.
 //
 // Wat de kleuren betekenen (palet van gethop.org, zie theme.go):
 //
@@ -23,19 +23,21 @@ package main
 import (
 	"strings"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
 )
 
-// De stijlen, één keer gemaakt: TextGrid houdt een pointer per cel vast.
-var (
-	stSection = &widget.CustomTextGridStyle{FGColor: hopPhosphor}
-	stComment = &widget.CustomTextGridStyle{FGColor: hopMuted}
-	stKey     = &widget.CustomTextGridStyle{FGColor: hopWave}
-	stPunct   = &widget.CustomTextGridStyle{FGColor: hopMuted}
-	stValue   = &widget.CustomTextGridStyle{FGColor: hopText}
-	stSecret  = &widget.CustomTextGridStyle{FGColor: hopCopper}
-	stString  = &widget.CustomTextGridStyle{FGColor: hopLeaf}
-	stNumber  = &widget.CustomTextGridStyle{FGColor: hopCopper}
+// De kleurnamen. Een fyne.ThemeColorName is gewoon een string, dus we mogen er
+// zelf verzinnen zolang het editor-thema ze beantwoordt (theme.go).
+const (
+	cSection fyne.ThemeColorName = "hopSection"
+	cComment fyne.ThemeColorName = "hopComment"
+	cKey     fyne.ThemeColorName = "hopKey"
+	cPunct   fyne.ThemeColorName = "hopPunct"
+	cValue   fyne.ThemeColorName = "hopValue"
+	cSecret  fyne.ThemeColorName = "hopSecret"
+	cString  fyne.ThemeColorName = "hopString"
+	cNumber  fyne.ThemeColorName = "hopNumber"
 )
 
 // secretKeys zijn de sleutels waarvan de WAARDE een geheim is. Precies deze
@@ -47,86 +49,115 @@ var secretKeys = map[string]bool{
 	"hopos.s3.key":    true,
 }
 
-// highlight zet de tekst in het grid en kleurt hem per regel.
-func highlight(tg *widget.TextGrid, text string) {
-	tg.SetText(text)
-	for row, line := range strings.Split(text, "\n") {
-		paintLine(tg, row, line)
-	}
-	tg.Refresh()
+// run is een stuk tekst van één kleur.
+type run struct {
+	text  string
+	color fyne.ThemeColorName
 }
 
-func paintLine(tg *widget.TextGrid, row int, line string) {
+var monoStyle = fyne.TextStyle{Monospace: true}
+
+// segmentsFor maakt de gekleurde laag voor een hele config.
+//
+// Elke regel eindigt met een segment dat NIET inline is: dat is wat RichText
+// als regeleinde leest. Een lege regel is dus één leeg segment — en die telt
+// mee, anders lopen de kleuren en de letters uit de pas.
+func segmentsFor(text string) []widget.RichTextSegment {
+	lines := strings.Split(text, "\n")
+	out := make([]widget.RichTextSegment, 0, len(lines)*3)
+	for _, line := range lines {
+		runs := runsFor(line)
+		for i, r := range runs {
+			out = append(out, &widget.TextSegment{
+				Text: r.text,
+				Style: widget.RichTextStyle{
+					TextStyle: monoStyle,
+					ColorName: r.color,
+					Inline:    i < len(runs)-1,
+				},
+			})
+		}
+	}
+	return out
+}
+
+func runsFor(line string) []run {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
-		return
+		return []run{{text: line, color: cValue}}
 	}
-	n := len([]rune(line))
 
 	// Commentaar. Een sectiekop (`# --- … ---`) krijgt fosforgroen: dat zijn de
 	// ankers waarmee je door zo'n config heen leest.
 	if strings.HasPrefix(trimmed, "#") {
-		st := stComment
+		c := cComment
 		if strings.Contains(trimmed, "---") {
-			st = stSection
+			c = cSection
 		}
-		tg.SetStyleRange(row, 0, row, n-1, st)
-		return
+		return []run{{text: line, color: c}}
 	}
 
 	eq := strings.IndexRune(line, '=')
 	if eq < 0 {
-		tg.SetStyleRange(row, 0, row, n-1, stValue)
-		return
+		return []run{{text: line, color: cValue}}
 	}
-	key := strings.TrimSpace(line[:eq])
-	eqCol := len([]rune(line[:eq]))
-
-	tg.SetStyleRange(row, 0, row, eqCol-1, stKey)
-	tg.SetStyle(row, eqCol, stPunct)
-	if eqCol+1 > n-1 {
-		return // sleutel zonder waarde
-	}
-
-	value := line[eq+1:]
+	key, value := strings.TrimSpace(line[:eq]), line[eq+1:]
+	runs := []run{{text: line[:eq], color: cKey}, {text: "=", color: cPunct}}
 	switch {
+	case value == "":
 	case secretKeys[key]:
-		tg.SetStyleRange(row, eqCol+1, row, n-1, stSecret)
+		runs = append(runs, run{text: value, color: cSecret})
 	case strings.HasPrefix(strings.TrimSpace(value), "{"):
-		paintJSON(tg, row, eqCol+1, value)
+		runs = append(runs, jsonRuns(value)...)
 	default:
-		tg.SetStyleRange(row, eqCol+1, row, n-1, stValue)
+		runs = append(runs, run{text: value, color: cValue})
 	}
+	return runs
 }
 
-// paintJSON kleurt een jobregel (hopos.init[]/hopos.apps[]): strings groen,
+// jsonRuns kleurt een jobregel (hopos.init[]/hopos.apps[]): strings groen,
 // getallen koper, en de haken en dubbele punten grijs zodat de inhoud opvalt en
 // niet de interpunctie. Geen JSON-parser: één pass over de tekens is genoeg voor
 // compacte JSON op één regel, en een onafgesloten string kleurt dan gewoon tot
 // het eind — dat is precies de fout die je wil zien.
-func paintJSON(tg *widget.TextGrid, row, col int, value string) {
-	inString := false
-	escaped := false
-	for i, r := range []rune(value) {
-		c := col + i
-		switch {
-		case escaped:
-			escaped = false
-			tg.SetStyle(row, c, stString)
-		case r == '\\' && inString:
-			escaped = true
-			tg.SetStyle(row, c, stString)
-		case r == '"':
-			inString = !inString
-			tg.SetStyle(row, c, stString)
-		case inString:
-			tg.SetStyle(row, c, stString)
-		case r >= '0' && r <= '9':
-			tg.SetStyle(row, c, stNumber)
-		case strings.ContainsRune("{}[]:,", r):
-			tg.SetStyle(row, c, stPunct)
-		default:
-			tg.SetStyle(row, c, stValue)
+//
+// Tekens van dezelfde kleur worden samengevoegd: elk segment is straks een
+// canvas-object, en per teken één object maakt een grote config traag.
+func jsonRuns(value string) []run {
+	var out []run
+	var b strings.Builder
+	cur := cValue
+	flush := func() {
+		if b.Len() > 0 {
+			out = append(out, run{text: b.String(), color: cur})
+			b.Reset()
 		}
 	}
+	inString, escaped := false, false
+	for _, r := range value {
+		var c fyne.ThemeColorName
+		switch {
+		case escaped:
+			escaped, c = false, cString
+		case r == '\\' && inString:
+			escaped, c = true, cString
+		case r == '"':
+			inString, c = !inString, cString
+		case inString:
+			c = cString
+		case r >= '0' && r <= '9':
+			c = cNumber
+		case strings.ContainsRune("{}[]:,", r):
+			c = cPunct
+		default:
+			c = cValue
+		}
+		if c != cur {
+			flush()
+			cur = c
+		}
+		b.WriteRune(r)
+	}
+	flush()
+	return out
 }

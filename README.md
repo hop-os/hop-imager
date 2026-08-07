@@ -76,9 +76,14 @@ button, no dialog. Edit, save, put the card back in the node.
 The config is coloured for what this format actually has, nothing more: section
 headers in phosphor, comments muted, keys blue, values white, JSON job lines
 with their strings and numbers apart — and **secrets in copper**, so a config
-open on your screen shows you where its keys are. `Edit` swaps the coloured view
-for a plain text field and back; the colours are redrawn when you are done, so a
-half-finished job line is visible immediately.
+open on your screen shows you where its keys are.
+
+The colours are there **while you type** — there is no view mode to leave. The
+text field is a real text field (selection, clipboard, undo, mouse) with
+invisible letters, laid exactly over a coloured copy of the same text; every
+keystroke recolours it, which costs under a millisecond for a 7 KB config. So a
+half-finished job line or a value you moved into a comment shows up the moment
+you type it.
 
 It works on a card that no operating system can mount, and on a board whose
 config lives inside the kernel, because the tool never touches a filesystem —

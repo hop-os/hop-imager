@@ -84,6 +84,58 @@ func (hopTheme) Color(n fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
 	return theme.DefaultTheme().Color(n, theme.VariantDark)
 }
 
+// editorTheme is wat de twee lagen van de config-editor te zien krijgen
+// (editor.go). Het beantwoordt de kleurnamen die de highlighter verzint, maakt
+// de letters van het tekstveld onzichtbaar — de kleuren komen van de laag
+// eronder — en haalt de twee maten weg die de lagen uit de pas zouden laten
+// lopen.
+type editorTheme struct{ hopTheme }
+
+func (t editorTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	switch n {
+	case theme.ColorNameForeground:
+		// De Entry tekent zijn eigen letters niet: die staan al gekleurd in de
+		// RichText eronder. Zou hij dat wel doen, dan zag je alles dubbel.
+		return color.Transparent
+	case theme.ColorNameInputBackground, theme.ColorNameInputBorder:
+		return color.Transparent // anders dekt het tekstveld de kleuren af
+	case theme.ColorNameSelection:
+		// Doorschijnend: een dekkend selectieblok zou de gekleurde tekst
+		// verbergen op precies het moment dat je hem aanwijst.
+		return color.NRGBA{R: 0x46, G: 0xD9, B: 0x79, A: 0x4D}
+	case cSection:
+		return hopPhosphor
+	case cComment, cPunct:
+		return hopMuted
+	case cKey:
+		return hopWave
+	case cValue:
+		return hopText
+	case cSecret, cNumber:
+		return hopCopper
+	case cString:
+		return hopLeaf
+	}
+	return t.hopTheme.Color(n, v)
+}
+
+func (t editorTheme) Size(n fyne.ThemeSizeName) float32 {
+	switch n {
+	case theme.SizeNameLineSpacing:
+		// De gekleurde laag en het tekstveld tellen allebei regelhoogtes op;
+		// regelafstand zou daar bij één van de twee bij komen en ze uit elkaar
+		// laten lopen. Nul is hier dus geen smaak maar een eis.
+		//
+		// SizeNameInputBorder blijft WEL staan, hoe verleidelijk ook: daar is de
+		// breedte van de cursor van gemaakt (entry.go: Resize(inputBorder,
+		// lineHeight)). Op nul is je cursor onzichtbaar — precies wat er 07-08
+		// gebeurde. Voor de uitlijning maakt hij niets uit: de Entry schuift zijn
+		// tekstlaag er met inputBorder in, en die laag trekt hem er weer af.
+		return 0
+	}
+	return t.hopTheme.Size(n)
+}
+
 func (hopTheme) Font(s fyne.TextStyle) fyne.Resource     { return theme.DefaultTheme().Font(s) }
 func (hopTheme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultTheme().Icon(n) }
 func (hopTheme) Size(n fyne.ThemeSizeName) float32       { return theme.DefaultTheme().Size(n) }

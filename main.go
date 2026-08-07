@@ -114,10 +114,7 @@ type ui struct {
 	keepCfg                 *widget.Check
 
 	// CONFIGURE
-	cfgEntry  *widget.Entry
-	cfgGrid   *widget.TextGrid  // gekleurde weergave (highlight.go)
-	cfgView   *container.Scroll // de weergave, met scrollbalk
-	cfgEdit   *widget.Button    // wisselt tussen lezen en bewerken
+	cfgEdit   *cfgEditor // gekleurd tekstveld (editor.go) — altijd bewerkbaar
 	cfgLbl    *widget.Label
 	cfgTags   *fyne.Container
 	cfgTarget string // /dev/rdiskN of een image-pad
@@ -532,18 +529,11 @@ func (u *ui) configureTab() fyne.CanvasObject {
 	u.cfgLbl = widget.NewLabel("nothing loaded")
 	u.cfgLbl.Truncation = fyne.TextTruncateEllipsis
 	u.cfgTags = container.NewHBox()
-	u.cfgEntry = widget.NewMultiLineEntry()
-	u.cfgEntry.TextStyle = fyne.TextStyle{Monospace: true}
-	u.cfgEntry.SetPlaceHolder("load a config from a card or an image file")
-	u.cfgEntry.Hide()
 
-	// De gekleurde weergave is wat je standaard ziet; bewerken is een keuze.
-	// TextGrid kan per teken een kleur maar niet typen, en een Entry kan typen
-	// maar niet kleuren — dus wisselen we, in plaats van er een half editortje
-	// van te maken.
-	u.cfgGrid = widget.NewTextGrid()
-	u.cfgView = container.NewScroll(u.cfgGrid)
-	u.cfgEdit = widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), u.toggleEdit)
+	// Eén veld dat altijd bewerkbaar is én kleur heeft — geen knop die tussen
+	// lezen en schrijven wisselt (Derek 07-08: "je wil het altijd editten, er is
+	// geen VIEW mode"). Zie editor.go voor hoe dat kan.
+	u.cfgEdit = newCfgEditor()
 	u.cfgSave = widget.NewButtonWithIcon("Save to card", theme.DocumentSaveIcon(), u.saveConfig)
 	u.cfgSave.Importance = widget.HighImportance
 	u.cfgSave.Disable()
@@ -554,11 +544,11 @@ func (u *ui) configureTab() fyne.CanvasObject {
 		container.NewVBox(
 			cardRow,
 			container.NewBorder(nil, nil, widget.NewIcon(theme.StorageIcon()),
-				container.NewHBox(u.cfgTags, u.cfgEdit), u.cfgLbl),
+				u.cfgTags, u.cfgLbl),
 		),
 		container.NewVBox(u.cfgBusy, u.cfgSave),
 		nil, nil,
-		container.NewStack(u.cfgView, u.cfgEntry),
+		u.cfgEdit.obj,
 	)
 }
 
@@ -580,25 +570,6 @@ func (u *ui) targetChosen(d disk.Device) {
 // packages gemaakt"). Eén weg voor élk board: unmount, authopen, venster.
 func (u *ui) cfgPathFor(d disk.Device) string { return d.RawPath }
 
-// toggleEdit wisselt tussen de gekleurde weergave en het tekstveld. Bij
-// terugwisselen wordt opnieuw gekleurd, dus je ziet meteen wat je hebt getypt —
-// inclusief een onafgesloten string in een jobregel.
-func (u *ui) toggleEdit() {
-	if u.cfgEntry.Visible() {
-		highlight(u.cfgGrid, u.cfgEntry.Text)
-		u.cfgEntry.Hide()
-		u.cfgView.Show()
-		u.cfgEdit.SetText("Edit")
-		u.cfgEdit.SetIcon(theme.DocumentCreateIcon())
-		return
-	}
-	u.cfgView.Hide()
-	u.cfgEntry.Show()
-	u.cfgEntry.Refresh()
-	u.cfgEdit.SetText("Done")
-	u.cfgEdit.SetIcon(theme.ConfirmIcon())
-}
-
 func (u *ui) loadConfig(target string) {
 	u.busy(true)
 	defer u.busy(false)
@@ -609,17 +580,16 @@ func (u *ui) loadConfig(target string) {
 	}
 	out := string(content)
 	u.cfgTarget = target
-	tag := pill("headless", colHeadless)
-	if isDesktop(content) {
-		tag = pill("desktop", colDesktop)
-	}
+	desktop := isDesktop(content)
 	fyne.Do(func() {
-		u.cfgEntry.SetText(out)
-		highlight(u.cfgGrid, out)
-		u.cfgEntry.Hide()
-		u.cfgView.Show()
-		u.cfgEdit.SetText("Edit")
-		u.cfgEdit.SetIcon(theme.DocumentCreateIcon())
+		// De pill MOET hier gemaakt worden en niet erbuiten: hij meet tekst op,
+		// en de tekstmeter van Fyne mag alleen van de UI-thread komen (anders
+		// crasht de shaper — gemeten 07-08).
+		tag := pill("headless", colHeadless)
+		if desktop {
+			tag = pill("desktop", colDesktop)
+		}
+		u.cfgEdit.SetText(out)
 		u.cfgLbl.SetText(target)
 		u.cfgTags.Objects = []fyne.CanvasObject{tag}
 		u.cfgTags.Refresh()
@@ -635,7 +605,7 @@ func (u *ui) saveConfig() {
 		u.log("Load a config first.")
 		return
 	}
-	target, text := u.cfgTarget, u.cfgEntry.Text
+	target, text := u.cfgTarget, u.cfgEdit.Text()
 	u.run(func() {
 		u.busy(true)
 		defer u.busy(false)
@@ -981,28 +951,30 @@ func (u *ui) pickLocal() {
 // hernoemde images), en een image zonder venster krijgt dat als oranje tag.
 func (u *ui) setImage(path string) {
 	u.imagePath = path
-	var tags []fyne.CanvasObject
 	f, err := os.Open(path)
 	if err != nil {
 		u.fail(err)
 		return
 	}
 	defer f.Close()
+
+	// Alleen de KEUZE valt hier; de pill zelf wordt op de UI-thread gemaakt,
+	// want die meet tekst op en dat mag alleen daar (zie loadConfig).
+	label, col := "no config window", colWarn
 	if w, err := cfgwin.Find(f); err == nil {
 		if content, cerr := cfgwin.Content(f, w); cerr == nil && isDesktop(content) {
-			tags = append(tags, pill("desktop", colDesktop))
+			label, col = "desktop", colDesktop
 			u.log(fmt.Sprintf("Image ready: desktop — boots into the GUI (config window at %#x).", w.Off))
 		} else {
-			tags = append(tags, pill("headless", colHeadless))
+			label, col = "headless", colHeadless
 			u.log(fmt.Sprintf("Image ready: headless — API + network console (config window at %#x).", w.Off))
 		}
 	} else {
-		tags = append(tags, pill("no config window", colWarn))
 		u.log("Image ready — " + err.Error())
 	}
 	fyne.Do(func() {
 		u.imageLbl.SetText(filepath.Base(path))
-		u.imageTags.Objects = tags
+		u.imageTags.Objects = []fyne.CanvasObject{pill(label, col)}
 		u.imageTags.Refresh()
 	})
 }
