@@ -138,12 +138,17 @@ type ui struct {
 	scanning bool
 	cancel   func()
 
+	// Eén voortgangsbalk PER SCHERM (progress.go): een gedeelde balk liet een
+	// flash op BURN eruitzien als een geschreven config en een klare scan.
+	burnProg *prog
+	findProg *prog
+	cfgBusy  *widget.ProgressBarInfinite
+
 	// gedeeld
 	tabs       *container.AppTabs
 	pendingCfg string // doel waarvan de config klaarstaat om te laden
 	cardSels   []*widget.Select
 	devices    map[string]disk.Device
-	progress   *widget.ProgressBar
 	status     *widget.Label // de volledige console (groeit in de BURN-tab)
 	lastLbl    *widget.Label // één regel, altijd zichtbaar onder elke tab
 	logScroll  *container.Scroll
@@ -267,7 +272,9 @@ func main() {
 	a.SetIcon(fyne.NewStaticResource("icon.png", iconPNG))
 	u := &ui{win: a.NewWindow("HopOS Imager"), devices: map[string]disk.Device{}}
 
-	u.progress = widget.NewProgressBar()
+	u.burnProg, u.findProg = newProg(), newProg()
+	u.cfgBusy = widget.NewProgressBarInfinite()
+	u.cfgBusy.Hide()
 	u.status = widget.NewLabel("")
 	u.status.Wrapping = fyne.TextWrapWord
 	u.status.TextStyle = fyne.TextStyle{Monospace: true}
@@ -299,7 +306,7 @@ func main() {
 
 	u.win.SetContent(container.NewBorder(
 		container.NewVBox(header, widget.NewSeparator()),
-		container.NewVBox(u.progress, u.lastLbl),
+		container.NewVBox(u.lastLbl),
 		nil, nil,
 		tabs,
 	))
@@ -398,6 +405,7 @@ func (u *ui) burnTab() fyne.CanvasObject {
 			cardRow,
 			u.keepCfg,
 			writeBtn,
+			u.burnProg.bar,
 			section("Console"),
 		),
 		nil, nil, nil,
@@ -480,7 +488,7 @@ func (u *ui) writeCard() {
 					u.log(fmt.Sprintf("Writing %d MB to %s (unmounting first), then reading it back…", st.Size()>>20, d.RawPath))
 					start := time.Now()
 					res, err := opWrite(u.imagePath, d.RawPath, u.keepCfg.Checked,
-						func(p string) { u.log("· " + p + "…") }, u.progressCB())
+						func(p string) { u.log("· " + p + "…") }, u.burnProg.begin())
 					if err != nil {
 						u.fail(err)
 						return
@@ -567,7 +575,7 @@ func (u *ui) configureTab() fyne.CanvasObject {
 				container.NewHBox(u.cfgTags, u.cfgEdit), u.cfgLbl),
 			hint,
 		),
-		container.NewVBox(u.cfgSave),
+		container.NewVBox(u.cfgBusy, u.cfgSave),
 		nil, nil,
 		container.NewStack(u.cfgView, u.cfgEntry),
 	)
@@ -615,6 +623,8 @@ func (u *ui) toggleEdit() {
 }
 
 func (u *ui) loadConfig(target string) {
+	u.busy(true)
+	defer u.busy(false)
 	content, win, err := opCfgRead(target)
 	if err != nil {
 		u.fail(err)
@@ -650,6 +660,8 @@ func (u *ui) saveConfig() {
 	}
 	target, text := u.cfgTarget, u.cfgEntry.Text
 	u.run(func() {
+		u.busy(true)
+		defer u.busy(false)
 		win, err := opCfgWrite(target, []byte(text))
 		if err != nil {
 			u.fail(err)
@@ -730,7 +742,7 @@ func (u *ui) findTab() fyne.CanvasObject {
 	hint.TextSize = 11
 
 	return container.NewBorder(
-		container.NewVBox(section("Nodes on this network"), u.scanBtn, hint),
+		container.NewVBox(section("Nodes on this network"), u.scanBtn, u.findProg.bar, hint),
 		nil, nil, nil,
 		u.nodeList,
 	)
@@ -803,9 +815,7 @@ func (u *ui) scanNetwork() {
 				}
 				u.log(fmt.Sprintf("FOUND %s  node %s  %s  %s%s", n.IP, n.Name, n.Arch, n.State, extra))
 			},
-			func(done, total int) {
-				fyne.Do(func() { u.progress.SetValue(float64(done) / float64(total)) })
-			})
+			u.findProg.begin2())
 		u.scanning = false
 		fyne.Do(func() { u.scanBtn.SetText("Scan my network") })
 		u.log(fmt.Sprintf("Scan done — %d HopOS node(s) found.", st.Found))
@@ -971,7 +981,7 @@ func (u *ui) pickAsset(a release.Asset) {
 	u.run(func() {
 		cache, _ := os.UserCacheDir()
 		u.log(fmt.Sprintf("Downloading %s (%d MB)…", a.Name, a.Size>>20))
-		path, err := release.Download(a, filepath.Join(cache, "hop-imager"), u.progressCB())
+		path, err := release.Download(a, filepath.Join(cache, "hop-imager"), u.burnProg.begin())
 		if err != nil {
 			u.fail(err)
 			return
@@ -1131,13 +1141,19 @@ func (u *ui) open(raw string) {
 // run draait werk buiten de UI-thread; alle schermupdates gaan via fyne.Do.
 func (u *ui) run(fn func()) { go fn() }
 
-func (u *ui) progressCB() func(done, total int64) {
-	return func(done, total int64) {
-		if total > 0 {
-			v := float64(done) / float64(total)
-			fyne.Do(func() { u.progress.SetValue(v) })
+// busy toont de onbepaalde balk op de CONFIGURE-tab: een venster lezen of
+// herschrijven heeft geen meetbare stappen (het zoeken over de kaart is één
+// beweging), maar wel een begin en een eind — en dat mag je zien.
+func (u *ui) busy(on bool) {
+	fyne.Do(func() {
+		if on {
+			u.cfgBusy.Show()
+			u.cfgBusy.Start()
+			return
 		}
-	}
+		u.cfgBusy.Stop()
+		u.cfgBusy.Hide()
+	})
 }
 
 func (u *ui) log(s string) {
