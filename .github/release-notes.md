@@ -14,6 +14,8 @@ The desktop tool for [HopOS](https://gethop.org) nodes: **burn** a card, **confi
 
 **The config editor keeps its colours while you type.** There is no view mode to leave: one field, always editable, recoloured on every keystroke — section headers, comments, keys, values, JSON job lines, and secrets in copper so an open config shows you where its keys are.
 
+**The progress bar tells the truth.** Phases that can be counted (writing, verifying, downloading) fill it; phases that are one movement — like putting your kept config back — run it as a busy bar instead of leaving it at 100% while the tool is still working.
+
 **Run the macOS build as the app, not as a loose binary.** macOS grants local-network access per app, and a bare binary has no identity to hang that permission on — every connection to a LAN peer then fails instantly with "no route to host", so FIND would see an empty network. The bundle asks once, and remembers.
 
 **Writing verifies itself.** The card is read back and compared to the image byte for byte on the same open device, before anything can mount it. That is the only moment the comparison means something: verify later and you are comparing against bytes the operating system wrote itself the instant it mounted your fresh card.
