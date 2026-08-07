@@ -4,8 +4,9 @@
 //	CONFIGURE  de node-config aanpassen — altijd achteraf, op de kaart zelf
 //	FIND       draaiende nodes op het netwerk vinden ("waar staat dat ding?")
 //
-// Die drie tabs zijn Dereks indeling (06-08) en ze staan niet voor niets in
-// die volgorde: configureren hoort ná het flashen, niet tijdens. De
+// Die drie zijn Dereks indeling (06-08) en ze staan niet voor niets in die
+// volgorde: configureren hoort ná het flashen, niet tijdens. Ze zitten elk in
+// hun eigen scherm, met een beginscherm dat de keuze maakt — zie home.go. De
 // config-bewerking gaat altijd RAW via het #HOPCFG1-venster
 // (internal/cfgwin, formaatcontract met hop-os image/hopcfg) — dat werkt op
 // élk board, ook als het OS de partitie niet mount (Radxa) of als de config in
@@ -135,8 +136,9 @@ type ui struct {
 	findProg *prog
 	cfgBusy  *widget.ProgressBarInfinite
 
-	// gedeeld
-	tabs       *container.AppTabs
+	// gedeeld — navigatie: één scherm zichtbaar, de rest verborgen (home.go).
+	screens    map[string]fyne.CanvasObject
+	current    string
 	pendingCfg string // doel waarvan de config klaarstaat om te laden
 	cardSels   []*widget.Select
 	devices    map[string]disk.Device
@@ -272,32 +274,37 @@ func main() {
 	u.lastLbl = widget.NewLabel("")
 	u.lastLbl.Truncation = fyne.TextTruncateEllipsis
 
+	// De release-verversing hoort bij BURN (dat is het enige dat images gebruikt),
+	// dus staat hij in die sectiekop en niet boven de hele app.
 	refreshBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), u.fetchReleases)
-	header := container.NewBorder(nil, nil, nil, container.NewVBox(refreshBtn),
-		container.NewVBox(logoArt(), subtitleText()))
 
-	tabs := container.NewAppTabs(
-		container.NewTabItemWithIcon("Burn", theme.DownloadIcon(), u.burnTab()),
-		container.NewTabItemWithIcon("Configure", theme.SettingsIcon(), u.configureTab()),
-		container.NewTabItemWithIcon("Find", theme.SearchIcon(), u.findTab()),
-	)
-	tabs.SetTabLocation(container.TabLocationTop)
-	u.tabs = tabs
-	// Naar CONFIGURE overstappen met een doel geselecteerd = de config laden.
-	// Zo blijft "kiezen is zien" waar, zonder een prompt op een andere tab.
-	tabs.OnSelected = func(ti *container.TabItem) {
-		if ti.Text == "Configure" && u.pendingCfg != "" && u.pendingCfg != u.cfgTarget {
-			target := u.pendingCfg
-			u.run(func() { u.loadConfig(target) })
-		}
+	u.screens = map[string]fyne.CanvasObject{
+		scrHome:      u.homeScreen(),
+		scrBurn:      u.sectionScreen(1, "BURN", descBurn, refreshBtn, u.burnTab()),
+		scrConfigure: u.sectionScreen(2, "CONFIGURE", descConfigure, nil, u.configureTab()),
+		scrFind:      u.sectionScreen(3, "FIND", descFind, nil, u.findTab()),
 	}
+	stack := container.NewStack()
+	for _, name := range []string{scrHome, scrBurn, scrConfigure, scrFind} {
+		stack.Add(u.screens[name])
+	}
+	u.show(scrHome)
 
+	// De laatste regel status blijft onder élk scherm staan: waar je ook bent,
+	// wat de tool net deed hoort zichtbaar te zijn.
 	u.win.SetContent(container.NewBorder(
-		container.NewVBox(header, widget.NewSeparator()),
-		container.NewVBox(u.lastLbl),
+		nil,
+		container.NewVBox(widget.NewSeparator(), u.lastLbl),
 		nil, nil,
-		tabs,
+		container.NewPadded(stack),
 	))
+	// Escape = terug naar het beginscherm. Kost niets: een scherm wordt verborgen,
+	// niet weggegooid — je keuzes en de console staan er nog als je terugkomt.
+	u.win.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
+		if ev.Name == fyne.KeyEscape && u.current != scrHome {
+			u.show(scrHome)
+		}
+	})
 	u.win.Resize(fyne.NewSize(820, 780))
 
 	u.log("Welcome. Loading the latest release…")
@@ -309,38 +316,26 @@ func main() {
 }
 
 // demoMode zet een beginstand voor demo's en de README-screenshots:
-// HOPIMAGER_TAB kiest de tab, HOPIMAGER_IMAGE zet een image klaar (en dus ook
-// de config die CONFIGURE toont), en op de FIND-tab begint de scan meteen. Puur
-// een startstand — er zit geen gedrag achter dat de tool anders niet heeft.
+// HOPIMAGER_TAB kiest het scherm, HOPIMAGER_IMAGE zet een image klaar (en dus
+// ook de config die CONFIGURE toont), en op FIND begint de scan meteen. Puur een
+// startstand — er zit geen gedrag achter dat de tool anders niet heeft.
 func (u *ui) demoMode() {
 	if p := os.Getenv("HOPIMAGER_IMAGE"); p != "" {
 		u.pendingCfg = p
 		u.run(func() { u.setImage(p) })
 	}
-	tab := os.Getenv("HOPIMAGER_TAB")
-	if tab == "" {
+	tab := strings.ToLower(os.Getenv("HOPIMAGER_TAB"))
+	if _, ok := u.screens[tab]; !ok {
 		return
 	}
-	for _, ti := range u.tabs.Items {
-		if !strings.EqualFold(ti.Text, tab) {
-			continue
-		}
-		u.tabs.Select(ti)
-		if strings.EqualFold(tab, "find") {
-			u.run(func() { time.Sleep(300 * time.Millisecond); u.scanNetwork() })
-		}
-		if strings.EqualFold(tab, "configure") && u.pendingCfg != "" {
-			p := u.pendingCfg
-			u.run(func() { time.Sleep(300 * time.Millisecond); u.loadConfig(p) })
-		}
+	u.show(tab)
+	if tab == scrFind {
+		u.run(func() { time.Sleep(300 * time.Millisecond); u.scanNetwork() })
 	}
-}
-
-func subtitleText() fyne.CanvasObject {
-	sub := canvas.NewText("imager "+version+" — burn · configure · find", hopMuted)
-	sub.TextStyle = fyne.TextStyle{Monospace: true}
-	sub.TextSize = 12
-	return container.NewCenter(sub)
+	if tab == scrConfigure && u.pendingCfg != "" {
+		p := u.pendingCfg
+		u.run(func() { time.Sleep(300 * time.Millisecond); u.loadConfig(p) })
+	}
 }
 
 // --- BURN --------------------------------------------------------------------
@@ -553,15 +548,13 @@ func (u *ui) configureTab() fyne.CanvasObject {
 	u.cfgSave.Importance = widget.HighImportance
 	u.cfgSave.Disable()
 
-	hint := canvas.NewText("configuring is always afterwards: write the card, then edit its config — as often as you like", hopMuted)
-	hint.TextSize = 11
-
+	// Geen uitlegregel meer onder de kop: wat CONFIGURE is staat nu op de knop
+	// op het beginscherm én in de sectiekop (home.go, descConfigure).
 	return container.NewBorder(
 		container.NewVBox(
 			cardRow,
 			container.NewBorder(nil, nil, widget.NewIcon(theme.StorageIcon()),
 				container.NewHBox(u.cfgTags, u.cfgEdit), u.cfgLbl),
-			hint,
 		),
 		container.NewVBox(u.cfgBusy, u.cfgSave),
 		nil, nil,
@@ -586,10 +579,6 @@ func (u *ui) targetChosen(d disk.Device) {
 // 06-08: "we zouden alles RAW doen... we hebben niet voor niets magie
 // packages gemaakt"). Eén weg voor élk board: unmount, authopen, venster.
 func (u *ui) cfgPathFor(d disk.Device) string { return d.RawPath }
-
-func (u *ui) onConfigureTab() bool {
-	return u.tabs != nil && u.tabs.Selected() != nil && u.tabs.Selected().Text == "Configure"
-}
 
 // toggleEdit wisselt tussen de gekleurde weergave en het tekstveld. Bij
 // terugwisselen wordt opnieuw gekleurd, dus je ziet meteen wat je hebt getypt —
@@ -726,11 +715,15 @@ func (u *ui) findTab() fyne.CanvasObject {
 		u.nodeList.UnselectAll()
 	}
 
-	hint := canvas.NewText(fmt.Sprintf("recognised by the console on tcp/%d — click a row to read its boot log. GUI opens the node's own screen, Manage hands name and address to gui.gethop.org. No API key is ever sent from here.", find.DefaultPort), hopMuted)
+	// HOE we een node herkennen (een TCP-connect op de console-poort) is techniek
+	// en stond hier alleen maar in de weg — Derek 07-08: "dat we zoeken op poort
+	// 5555, who cares". Wat er WEL hoort te staan is de belofte bij de knop die
+	// naar buiten gaat: deze tool geeft nooit een sleutel mee.
+	hint := canvas.NewText("Click a row to read a node's boot log. GUI opens its own screen; Manage hands only its name and address to gui.gethop.org — never a key.", hopMuted)
 	hint.TextSize = 11
 
 	return container.NewBorder(
-		container.NewVBox(section("Nodes on this network"), u.scanBtn, u.findProg.bar, hint),
+		container.NewVBox(u.scanBtn, u.findProg.bar, hint),
 		nil, nil, nil,
 		u.nodeList,
 	)

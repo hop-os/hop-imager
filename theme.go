@@ -23,6 +23,16 @@ var (
 	hopCopper   = color.NRGBA{R: 0xE0, G: 0x9A, B: 0x63, A: 0xFF} // --copper
 	hopFault    = color.NRGBA{R: 0xE0, G: 0x65, B: 0x4F, A: 0xFF} // --fault
 	hopDeep     = color.NRGBA{R: 0x07, G: 0x10, B: 0x19, A: 0xFF} // tekst óp fosfor
+
+	// fadedMuted is muted maar halfdoorzichtig: voor tekst die er mag zijn zonder
+	// mee te praten — de stapnummers op het beginscherm, en de regel die de
+	// volgorde uitlegt.
+	fadedMuted = color.NRGBA{R: 0x7F, G: 0x8B, B: 0x9B, A: 0x66}
+	// watermarkMuted is nóg lichter: voor het grote stapnummer in de hoek van een
+	// kaart. Groot mag alleen als het licht genoeg is om decor te blijven.
+	watermarkMuted = color.NRGBA{R: 0x7F, G: 0x8B, B: 0x9B, A: 0x3D}
+	// transparent maakt een onzichtbare rechthoek die alleen ruimte inneemt.
+	transparent = color.NRGBA{}
 )
 
 // De tag-kleuren volgen het palet: leaf = er komt beeld uit, wave = op

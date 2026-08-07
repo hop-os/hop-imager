@@ -2,7 +2,7 @@
 
 The desktop tool for [HopOS](https://gethop.org) nodes: **burn** a card,
 **configure** it, and **find** your nodes on the network. One window, three
-tabs, no terminal.
+steps, no terminal.
 
 ```
    (\(\
@@ -11,11 +11,20 @@ tabs, no terminal.
               the Go-only OS
 ```
 
-## The three tabs
+## One thing at a time
+
+![the start screen](docs/home.png)
+
+You start by choosing *what you are doing*, because these three never happen at
+the same time: you burn a card, or you change a config, or you look for a node.
+Each button says in one line what it does, and only then do you get the tools for
+that job — with a back arrow (or Escape) to return. The 1-2-3 in the corner is
+the order a new node goes through, not a wizard: steps 2 and 3 stand on their
+own.
 
 ### BURN — write a card
 
-![BURN tab](docs/burn.png)
+![BURN](docs/burn.png)
 
 Pick the **type** first: *Desktop* boots into the HopOS GUI, *Headless* is a
 node with no display code linked at all — API plus network console. Then pick
@@ -57,7 +66,7 @@ a surprise. A flash that dies halfway can never eat your API key.
 
 ### CONFIGURE — change the node config, afterwards
 
-![CONFIGURE tab](docs/configure.png)
+![CONFIGURE](docs/configure.png)
 
 Configuring is not part of writing. You write a card once and re-configure it
 as often as you like: node name, cluster, API key, console port, the jobs it
@@ -77,7 +86,7 @@ see the next section.
 
 ### FIND — where is that thing on my network?
 
-![FIND tab](docs/find.png)
+![FIND](docs/find.png)
 
 Every HopOS node serves its console on `tcp/5555`, and hands over its retained
 boot log the moment you connect. So a single TCP connect both identifies a node
