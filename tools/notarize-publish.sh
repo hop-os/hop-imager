@@ -33,4 +33,20 @@ fi
 
 gh release upload "$TAG" --clobber "$ASSET"
 gh release upload rolling-release --clobber "$ASSET"
-echo ">> $ASSET genotariseerd en geüpload naar $TAG en rolling-release" >&2
+
+# SHA256SUMS bijwerken. CI maakt dat bestand voor wat DAAR gebouwd is; de
+# macOS-asset komt hiervandaan, dus zonder deze stap dekt de checksumlijst juist
+# de grootste download niet — een half bewijs is geen bewijs.
+for tag in "$TAG" rolling-release; do
+	tmp="$(mktemp -d)"
+	if gh release download "$tag" --pattern SHA256SUMS --dir "$tmp" 2>/dev/null; then
+		grep -v " $ASSET\$" "$tmp/SHA256SUMS" > "$tmp/new" || true
+	else
+		: > "$tmp/new"
+	fi
+	shasum -a 256 "$ASSET" >> "$tmp/new"
+	sort -k2 "$tmp/new" > "$tmp/SHA256SUMS"
+	gh release upload "$tag" --clobber "$tmp/SHA256SUMS"
+	rm -rf "$tmp"
+done
+echo ">> $ASSET genotariseerd, geüpload naar $TAG en rolling-release, SHA256SUMS bijgewerkt" >&2
