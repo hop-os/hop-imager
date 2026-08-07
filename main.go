@@ -385,7 +385,7 @@ func (u *ui) burnTab() fyne.CanvasObject {
 			cardRow,
 			u.keepCfg,
 			writeBtn,
-			u.burnProg.bar,
+			u.burnProg.obj,
 			section("Console"),
 		),
 		nil, nil, nil,
@@ -467,8 +467,16 @@ func (u *ui) writeCard() {
 					}
 					u.log(fmt.Sprintf("Writing %d MB to %s (unmounting first), then reading it back…", st.Size()>>20, d.RawPath))
 					start := time.Now()
+					// Elke fase begint als "bezig zonder maat"; kan hij tellen,
+					// dan zet de eerste telling de gewone balk vanzelf terug.
+					// Zo staat de balk niet op 100% te doen alsof het klaar is
+					// terwijl je config nog teruggezet wordt (Derek 07-08).
 					res, err := opWrite(u.imagePath, d.RawPath, u.keepCfg.Checked,
-						func(p string) { u.log("· " + p + "…") }, u.burnProg.begin())
+						func(p string) {
+							u.log("· " + p + "…")
+							u.burnProg.work()
+						}, u.burnProg.begin())
+					u.burnProg.measured()
 					if err != nil {
 						u.fail(err)
 						return
@@ -693,7 +701,7 @@ func (u *ui) findTab() fyne.CanvasObject {
 	hint.TextSize = 11
 
 	return container.NewBorder(
-		container.NewVBox(u.scanBtn, u.findProg.bar, hint),
+		container.NewVBox(u.scanBtn, u.findProg.obj, hint),
 		nil, nil, nil,
 		u.nodeList,
 	)
@@ -924,7 +932,12 @@ func (u *ui) pickAsset(a release.Asset) {
 	u.run(func() {
 		cache, _ := os.UserCacheDir()
 		u.log(fmt.Sprintf("Downloading %s (%d MB)…", a.Name, a.Size>>20))
-		path, err := release.Download(a, filepath.Join(cache, "hop-imager"), u.burnProg.begin())
+		// Draaien tot de eerste bytes er zijn: verbinden duurt even, en een balk
+		// die op 0% staat leest als "er gebeurt niets".
+		prog := u.burnProg.begin()
+		u.burnProg.work()
+		path, err := release.Download(a, filepath.Join(cache, "hop-imager"), prog)
+		u.burnProg.measured()
 		if err != nil {
 			u.fail(err)
 			return
