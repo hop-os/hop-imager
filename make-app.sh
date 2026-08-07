@@ -20,7 +20,23 @@ APP="HopOS Imager.app"
 ID="org.gethop.imager"
 VERSION="${VERSION:-0.0.0-dev}"
 
-go build -trimpath -ldflags "-X main.version=$VERSION" -o hop-imager .
+# UNIVERSAL BINARY: beide architecturen in één app, want dan is er één
+# macOS-download die op elke Mac werkt — en één ding om te notariseren. De
+# tweede slice is een cross-build (de macOS-SDK draagt beide), en als die op
+# deze machine niet lukt gaat het door met alleen de eigen architectuur; dan
+# zegt het dat ook.
+LDFLAGS="-X main.version=$VERSION"
+NATIVE="$(go env GOARCH)"
+OTHER=arm64; [ "$NATIVE" = arm64 ] && OTHER=amd64
+go build -trimpath -ldflags "$LDFLAGS" -o "hop-imager-$NATIVE" .
+if CGO_ENABLED=1 GOARCH="$OTHER" go build -trimpath -ldflags "$LDFLAGS" -o "hop-imager-$OTHER" . 2>/dev/null; then
+	lipo -create -output hop-imager "hop-imager-$NATIVE" "hop-imager-$OTHER"
+	echo "universal: $NATIVE + $OTHER" >&2
+else
+	cp "hop-imager-$NATIVE" hop-imager
+	echo "alleen $NATIVE (de $OTHER-slice bouwde niet op deze machine)" >&2
+fi
+rm -f "hop-imager-$NATIVE" "hop-imager-$OTHER"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

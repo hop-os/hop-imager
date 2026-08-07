@@ -25,14 +25,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            goos: darwin
-            goarch: arm64
-            asset: hop-imager-macos-arm64.zip
-          - os: macos-13
-            goos: darwin
-            goarch: amd64
-            asset: hop-imager-macos-amd64.zip
+          # GEEN macOS-job. Niet omdat het niet zou bouwen, maar omdat een
+          # runner Dereks Developer ID niet heeft: hij zou een ad-hoc
+          # ondertekende app opleveren, en die weigert macOS bij een download
+          # met als enige uitweg "naar prullenmand". De macOS-asset komt daarom
+          # van tools/notarize-publish.sh op een machine mét het certificaat —
+          # universal binary, ondertekend, genotariseerd en gestapeld. Zodra het
+          # certificaat als secret in deze repo staat kan die job hier terug.
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
@@ -49,27 +48,21 @@ jobs:
           go-version: "1.25"
           cache: true
 
-      # Fyne op Linux: OpenGL- en X11-headers. Op macOS en Windows zit alles
-      # wat nodig is in de standaard-runner.
+      # Fyne op Linux: OpenGL, X11 én WAYLAND. GLFW 3.4 compileert beide
+      # backends, dus zonder de wayland-headers faalt de build op
+      # wayland-client-core.h (gemeten 07-08). libdecor hoort erbij: dat is wat
+      # GLFW op wayland voor vensterranden gebruikt.
       - name: Linux build deps
         if: matrix.goos == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev
 
       - name: Version
         id: v
         shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      # macOS: een APP-BUNDLE, geen losse binary. Dat is geen verpakking maar
-      # een eis — zonder bundle-identiteit weigert macOS het lokale netwerk en
-      # vindt FIND niets (zie make-app.sh).
-      - name: Build macOS app bundle
-        if: matrix.goos == 'darwin'
-        run: |
-          VERSION="${{ steps.v.outputs.version }}" ./make-app.sh
-          zip -qry "${{ matrix.asset }}" "HopOS Imager.app"
 
       - name: Build Linux
         if: matrix.goos == 'linux'
@@ -99,6 +92,8 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # SHA256SUMS dekt wat in DEZE run gebouwd is; de macOS-asset wordt er
+      # lokaal aan toegevoegd (die hoort bij een certificaat dat hier niet is).
       - name: Checksums
         run: |
           cd dist

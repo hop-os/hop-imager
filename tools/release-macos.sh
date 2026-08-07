@@ -30,7 +30,8 @@
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.0.0-dev}"
 APP="HopOS Imager.app"
-ASSET="hop-imager-macos-$(uname -m | sed 's/x86_64/amd64/').zip"
+# Eén asset voor alle Macs: make-app.sh bouwt een universal binary.
+ASSET="hop-imager-macos-universal.zip"
 
 VERSION="$VERSION" ./make-app.sh
 
@@ -55,4 +56,5 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$ASSET"
 
 echo "" >&2
 echo "$ASSET klaar ($(du -h "$ASSET" | cut -f1))" >&2
+lipo -archs "$APP/Contents/MacOS/hop-imager" 2>/dev/null | sed 's/^/  architecturen: /' >&2 || true
 spctl -a -vvv "$APP" 2>&1 | sed 's/^/  gatekeeper: /' >&2 || true

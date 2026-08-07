@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 
 VERSION="${VERSION:?zet VERSION=x.y.z}"
 TAG="${TAG:-v$VERSION}"
-ASSET="hop-imager-macos-$(uname -m | sed 's/x86_64/amd64/').zip"
+ASSET="hop-imager-macos-universal.zip"
 
 if ! xcrun notarytool store-credentials "$NOTARY_PROFILE" \
 	--apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD" >/dev/null 2>&1; then
