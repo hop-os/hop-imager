@@ -61,16 +61,7 @@ import (
 	"github.com/xinix00/hop-imager/internal/release"
 )
 
-// blockedHint legt de stilte uit die macOS veroorzaakt. Sinds Sequoia moet een
-// app toestemming hebben om met apparaten op het lokale netwerk te praten, en
-// zonder die toestemming krijgt hij geen dialoog maar EHOSTUNREACH op élke
-// LAN-peer — de gateway en de eigen machine zijn vrijgesteld, en dus lijkt het
-// netwerk gewoon leeg. Gemeten op Dereks Mac 06-08: ping en python bij dezelfde
-// node prima, elke Go-dial in nul milliseconden "no route to host".
-const blockedHint = "macOS needs to allow this app on the local network. Run it as the app bundle (./make-app.sh, then open \"HopOS Imager.app\") and approve the prompt, " +
-	"or enable it under System Settings → Privacy & Security → Local Network. A loose binary has no identity to hang that permission on, so it is refused silently."
-
-// iconPNG is de bunny uit tools/mkicon: hetzelfde beeld als het app-icoon, ook
+// iconPNG is de bunny uit tools/mkicon — hetzelfde beeld als het app-icoon, ook
 // als de tool als losse binary draait (Linux, Windows) en er geen bundle is.
 //
 //go:embed icon.png
@@ -261,9 +252,6 @@ func main() {
 			fmt.Printf("%-15s  %-16s  %-8s  %-22s  api-open=%v\n", nd.IP, nd.Name, nd.Arch, nd.State, nd.InsecND)
 		}, nil)
 		fmt.Fprintf(os.Stderr, "%d node(s) found\n", st.Found)
-		if st.Blocked() {
-			fmt.Fprintln(os.Stderr, blockedHint)
-		}
 		return
 	}
 
@@ -819,14 +807,6 @@ func (u *ui) scanNetwork() {
 		u.scanning = false
 		fyne.Do(func() { u.scanBtn.SetText("Scan my network") })
 		u.log(fmt.Sprintf("Scan done — %d HopOS node(s) found.", st.Found))
-		if st.Blocked() {
-			// Niet stil blijven bij een lege lijst die géén lege lijst is.
-			u.log("BLOCKED: macOS refused local network access — every address answered instantly with \"no route to host\".")
-			u.log(blockedHint)
-			fyne.Do(func() {
-				dialog.ShowInformation("Local network access is blocked", blockedHint, u.win)
-			})
-		}
 	})
 }
 
