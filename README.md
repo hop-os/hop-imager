@@ -26,16 +26,25 @@ own.
 
 ![BURN](docs/burn.png)
 
-Pick the **type** first: *Desktop* boots into the HopOS GUI, *Headless* is a
-node with no display code linked at all — API plus network console. Then pick
-your **board**; both choices together select the image, so switching type keeps
-your board and fetches the other flavour. A board without that flavour stays
-visible but disabled (the LicheeRV Nano has no desktop image — that is a fact
-about the silicon, not a missing download).
+**RELEASE** is the first line, because HopOS also ships betas now and then "the
+latest release" stops being an answer. It says which channel you are looking at
+— `stable` in phosphor, `beta` in copper — with the version number behind it,
+and that version number is the selector: every HopOS release that carries card
+images is in the list, newest first, so you can also go back to the version your
+other nodes run.
 
-The image comes from the latest HopOS release on GitHub, downloaded once and
-cached. Insert a card or a USB stick and it appears in **TARGET** by itself; if
-it is the only one, it is already selected.
+The tool opens on the **newest stable**. A beta is something you choose, not
+something that happens to you.
+
+Pick the **type** next: *Desktop* boots into the HopOS GUI, *Headless* is a
+node with no display code linked at all — API plus network console. Then pick
+your **board**; version, type and board together select the image, so switching
+one of the three keeps the other two and fetches the matching file. A board
+without that flavour stays visible but disabled (the LicheeRV Nano has no
+desktop image — that is a fact about the silicon, not a missing download).
+
+The image is downloaded once and cached. Insert a card or a USB stick and it
+appears in **TARGET** by itself; if it is the only one, it is already selected.
 
 **Write + verify** is one button because it is one job: the card is written,
 then read back and compared to the image byte for byte on the same open device,
@@ -167,6 +176,7 @@ Command line, no GUI needed:
 
 ```sh
 ./hop-imager -scan      # list HopOS nodes on this network
+./hop-imager -releases  # the versions BURN offers, and the one it opens on (*)
 ```
 
 ## Platform support

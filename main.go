@@ -1,6 +1,6 @@
 // hop-imager — één tool voor de hele levensloop van een HopOS-node:
 //
-//	BURN       de laatste release naar een kaart schrijven en verifiëren
+//	BURN       een gekozen release naar een kaart schrijven en verifiëren
 //	CONFIGURE  de node-config aanpassen — altijd achteraf, op de kaart zelf
 //	FIND       draaiende nodes op het netwerk vinden ("waar staat dat ding?")
 //
@@ -28,6 +28,7 @@
 //
 //	go build . && ./hop-imager
 //	./hop-imager -scan            (dezelfde zoeker zonder GUI)
+//	./hop-imager -releases        (welke versies ziet de tool, en welke kiest hij?)
 //	./hop-imager -disks           (wat de tool als doel ziet)
 //	./hop-imager -probe /dev/rX   (kan ik dit device lezen? zit er een venster in?)
 package main
@@ -103,6 +104,11 @@ type ui struct {
 	win fyne.Window
 
 	// BURN
+	releases                []release.Release
+	relRow                  *fyne.Container // de regel bovenin, herschikt als de pil verschijnt
+	relChan                 *tagPill        // stable of beta, gekleurd
+	relSel                  *widget.Select  // het versienummer erachter — en de keuze
+	relTag                  string
 	btnDesktop, btnHeadless *widget.Button
 	flavorVal               string
 	boardBox                *fyne.Container
@@ -219,6 +225,28 @@ func main() {
 		return
 	}
 
+	// -releases: welke versies de tool ziet, in welk kanaal ze zitten en welke
+	// hij uit zichzelf laat zien (de ster). Diagnose ("waarom staat die beta er
+	// niet bij?") én het meetinstrument voor internal/release.
+	if slices.Contains(os.Args[1:], "-releases") {
+		rels, err := release.List(release.Repo)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		rels = release.WithImages(rels)
+		def, _ := release.Pick(rels)
+		for _, r := range rels {
+			star := " "
+			if r.Tag == def.Tag {
+				star = "*"
+			}
+			fmt.Printf("%s %-8s %-18s %d image(s)\n", star, r.Channel(), r.Tag, len(release.Images(r.Assets)))
+		}
+		fmt.Fprintf(os.Stderr, "%d version(s) with card images\n", len(rels))
+		return
+	}
+
 	// -probe <device>: kan de tool dit device überhaupt lezen, en zit er een
 	// config-venster in? Het meetinstrument voor de rechten-weg (authopen).
 	if i := slices.Index(os.Args[1:], "-probe"); i >= 0 && len(os.Args) > i+2 {
@@ -271,13 +299,9 @@ func main() {
 	u.lastLbl = widget.NewLabel("")
 	u.lastLbl.Truncation = fyne.TextTruncateEllipsis
 
-	// De release-verversing hoort bij BURN (dat is het enige dat images gebruikt),
-	// dus staat hij in die sectiekop en niet boven de hele app.
-	refreshBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), u.fetchReleases)
-
 	u.screens = map[string]fyne.CanvasObject{
 		scrHome:      u.homeScreen(),
-		scrBurn:      u.sectionScreen(1, "BURN", descBurn, refreshBtn, u.burnTab()),
+		scrBurn:      u.sectionScreen(1, "BURN", descBurn, nil, u.burnTab()),
 		scrConfigure: u.sectionScreen(2, "CONFIGURE", descConfigure, nil, u.configureTab()),
 		scrFind:      u.sectionScreen(3, "FIND", descFind, nil, u.findTab()),
 	}
@@ -304,7 +328,7 @@ func main() {
 	})
 	u.win.Resize(fyne.NewSize(820, 780))
 
-	u.log("Welcome. Loading the latest release…")
+	u.log("Welcome. Loading the release list…")
 	u.fetchReleases()
 	u.refreshDevices()
 	u.watchDevices()
@@ -338,6 +362,25 @@ func (u *ui) demoMode() {
 // --- BURN --------------------------------------------------------------------
 
 func (u *ui) burnTab() fyne.CanvasObject {
+	// BOVENIN: welke release je brandt. HopOS heeft sinds v1.12 ook beta's, en
+	// dan is "de laatste release" geen antwoord meer maar een vraag. Dus staat
+	// het er: het kanaal als gekleurde pil (fosfor = stable, koper = beta) en
+	// het versienummer erachter, dat tegelijk de keuzelijst ís. Boven Type en
+	// Device, want die twee kiezen ergens ín een versie — versie + type + board
+	// wijzen samen één image aan.
+	//
+	// De verversknop hoort hier en niet meer in de sectiekop: hij haalt de
+	// versielijst op, dus hij staat bij de versielijst.
+	u.relChan = newTagPill()
+	u.relChan.wrap.Hide() // pas als we weten wélke release we tonen
+	u.relSel = widget.NewSelect(nil, u.pickRelease)
+	u.relSel.PlaceHolder = "loading the release list…"
+	u.relRow = container.NewBorder(nil, nil,
+		container.NewHBox(section("Release"), u.relChan.wrap),
+		widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), u.fetchReleases),
+		u.relSel,
+	)
+
 	// Twee ONMISKENBARE knoppen (Derek 06-08: "die keuze moet echt
 	// duidelijker!"): de gekozen smaak staat gevuld fosforgroen, de andere
 	// panel-grijs — een segmented control, geen radiootje.
@@ -378,6 +421,7 @@ func (u *ui) burnTab() fyne.CanvasObject {
 	// 06-08). Border met center = console doet precies dat.
 	return container.NewBorder(
 		container.NewVBox(
+			u.relRow,
 			section("Type"), flavorRow,
 			section("Device"), u.boardBox,
 			chosenRow,
@@ -809,21 +853,104 @@ func ipLess(a, b string) bool {
 
 func (u *ui) fetchReleases() {
 	u.run(func() {
-		tag, assets, err := release.Latest(release.Repo)
+		all, err := release.List(release.Repo)
 		if err != nil {
 			u.fail(err)
 			return
 		}
-		boards := parseBoards(release.Images(assets))
-		fyne.Do(func() {
-			u.boards = boards
-			u.rebuildBoards()
-		})
-		u.log(fmt.Sprintf("Release %s: %d board(s). Pick the type, then your board — or choose your own image.", tag, len(boards)))
-		if len(boards) == 0 {
-			u.log("This release carries no .img assets yet — use Choose your own… instead.")
+		rels := release.WithImages(all)
+		def, ok := release.Pick(rels)
+		if !ok {
+			u.log("No release with card images found — use Choose your own… instead.")
+			return
 		}
+		tags := make([]string, len(rels))
+		for i, r := range rels {
+			tags[i] = r.Tag
+		}
+		u.log(fmt.Sprintf("%d version(s) with card images, newest first.", len(rels)))
+		fyne.Do(func() {
+			u.releases = rels
+			u.relSel.Options = tags
+			u.relSel.Refresh()
+			// Verversen is geen nieuwe keuze: stond je op een beta, dan blijf je
+			// daarop staan zolang die versie bestaat. Alleen wie nog niets koos
+			// krijgt de standaard te zien.
+			for _, r := range rels {
+				if r.Tag == u.relTag {
+					u.applyRelease(r)
+					return
+				}
+			}
+			u.applyRelease(def)
+		})
 	})
+}
+
+// pickRelease hangt aan de keuzelijst bovenin: een andere versie kiezen.
+func (u *ui) pickRelease(tag string) {
+	if tag == u.relTag {
+		return // onze eigen SetSelected komt hier terug
+	}
+	for _, r := range u.releases {
+		if r.Tag == tag {
+			u.applyRelease(r)
+			return
+		}
+	}
+}
+
+// applyRelease zet één release in beeld: het kanaal als gekleurde pil bovenin
+// met het versienummer ernaast, en de boards van díe release eronder. Draait
+// op de UI-thread — de pil meet tekst op, en dat mag alleen daar.
+//
+// Een board dat al gekozen was blijft gekozen en volgt mee naar de nieuwe
+// versie: van versie wisselen is hetzelfde soort keuze als van smaak wisselen
+// (zie setFlavor) — versie + type + board sámen wijzen één image aan.
+func (u *ui) applyRelease(rel release.Release) {
+	same := u.relTag == rel.Tag
+	u.relTag = rel.Tag
+	u.relChan.set(rel.Channel(), channelColor(rel.Channel()))
+	u.relChan.wrap.Show()
+	u.relRow.Refresh() // de pil verschijnt (of wordt breder): de regel moet opnieuw geschikt
+	u.relSel.SetSelected(rel.Tag)
+	u.boards = parseBoards(release.Images(rel.Assets))
+	u.rebuildBoards()
+	// Dezelfde versie opnieuw (de verversknop) is géén nieuwe keuze: dan niets
+	// zeggen en vooral niet opnieuw gaan downloaden — een .img.gz is niet
+	// overslaanbaar, dus dat zou minuten kosten voor een image dat er al is.
+	if same {
+		return
+	}
+	u.log(fmt.Sprintf("%s %s: %d board(s). Pick the type, then your board — or choose your own image.",
+		rel.Channel(), rel.Tag, len(u.boards)))
+	if u.selBoard == "" {
+		return
+	}
+	for _, b := range u.boards {
+		if b.id != u.selBoard {
+			continue
+		}
+		if a, ok := b.byFlavor[u.flavor()]; ok {
+			u.pickAsset(a)
+		} else {
+			u.selBoard = ""
+			u.rebuildBoards()
+			u.log("This version has no " + u.flavor() + " image for that board — pick another board.")
+		}
+		return
+	}
+	// Het board bestaat niet in deze versie (een nieuw bordje, een oude release).
+	u.selBoard = ""
+	u.rebuildBoards()
+	u.log("This version has no image for that board — pick another board.")
+}
+
+func channelColor(ch string) color.Color {
+	if ch == release.Beta {
+		return colBeta
+	}
+	return colStable
 }
 
 // parseBoards groepeert de release-assets per board — de naamconventie van

@@ -42,7 +42,7 @@ const (
 // beginscherm ÉN in de kop van de sectie zelf: zodra je binnen bent is de
 // knoptekst weg, en dan hoort er nog te staan waar je bent.
 const (
-	descBurn      = "Write the latest HopOS release to a card or USB stick — and read it back to prove it landed."
+	descBurn      = "Write a HopOS release — stable or beta — to a card or USB stick, and read it back to prove it landed."
 	descConfigure = "Change the config of a card you already burned: its name, its keys, the jobs it runs."
 	descFind      = "Find the HopOS nodes that are running on your network, and open their screen."
 )

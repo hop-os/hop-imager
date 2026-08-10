@@ -1,6 +1,6 @@
-// Package release praat met GitHub: de laatste release van xinix00/HopOS
-// uitlezen en een gekozen kaart-image downloaden (met voortgang, en .gz
-// transparant uitgepakt — het venster-patchen werkt op de rauwe bytes).
+// Package release praat met GitHub: de releases van xinix00/HopOS uitlezen —
+// stable én beta — en een gekozen kaart-image downloaden (met voortgang, en
+// .gz transparant uitgepakt — het venster-patchen werkt op de rauwe bytes).
 package release
 
 import (
@@ -18,38 +18,100 @@ import (
 // Repo is de bron van de images; één plek, zodat een fork hem kan verzetten.
 const Repo = "xinix00/HopOS"
 
+// De twee kanalen, in het woord dat de tool toont. GitHub kent alleen de vlag
+// "prerelease"; stable en beta is hoe een mens het noemt.
+const (
+	Stable = "stable"
+	Beta   = "beta"
+)
+
 type Asset struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
 	URL  string `json:"browser_download_url"`
 }
 
+// Release is één release van HopOS: de tag, of het een voorproefje is, en wat
+// eraan hangt.
+type Release struct {
+	Tag        string  `json:"tag_name"`
+	Prerelease bool    `json:"prerelease"`
+	Draft      bool    `json:"draft"`
+	Assets     []Asset `json:"assets"`
+}
+
+// Channel geeft het kanaal als woord: dat is wat de tool bovenin toont.
+func (r Release) Channel() string {
+	if r.Prerelease {
+		return Beta
+	}
+	return Stable
+}
+
 var client = &http.Client{Timeout: 30 * time.Second}
 
-// Latest geeft de tag en de assets van de laatste release.
-func Latest(repo string) (string, []Asset, error) {
-	req, err := http.NewRequest("GET", "https://api.github.com/repos/"+repo+"/releases/latest", nil)
+// List geeft de releases van nieuw naar oud, prereleases inbegrepen — die zijn
+// juist de reden dat er iets te kiezen valt. Drafts blijven eruit: die bestaan
+// alleen voor wie ze schreef, en hun assets zijn niet publiek te downloaden.
+//
+// Eén pagina van honderd is de horizon. Dat is geen willekeurige grens: verder
+// terug staan alleen de tags van vóór de kaart-images, en die vallen in
+// WithImages tóch af.
+func List(repo string) ([]Release, error) {
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/"+repo+"/releases?per_page=100", nil)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	req.Header.Set("User-Agent", "hop-imager")
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", nil, fmt.Errorf("GitHub API: %s", resp.Status)
+		return nil, fmt.Errorf("GitHub API: %s", resp.Status)
 	}
-	var rel struct {
-		Tag    string  `json:"tag_name"`
-		Assets []Asset `json:"assets"`
+	var all []Release
+	if err := json.NewDecoder(resp.Body).Decode(&all); err != nil {
+		return nil, err
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return "", nil, err
+	var out []Release
+	for _, r := range all {
+		if !r.Draft {
+			out = append(out, r)
+		}
 	}
-	return rel.Tag, rel.Assets, nil
+	return out, nil
+}
+
+// WithImages houdt de releases over die ook echt een kaart-image dragen. De
+// eerste HopOS-tags hingen alleen broncode aan de release, en een versie die
+// je niet kunt branden hoort niet in een keuzelijst van deze tool.
+func WithImages(rels []Release) []Release {
+	var out []Release
+	for _, r := range rels {
+		if len(Images(r.Assets)) > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Pick kiest de release die de tool uit zichzelf laat zien: de nieuwste
+// stable. Een beta is iets wat je kiest, niet iets wat je overkomt — pas als
+// er geen enkele stable in de lijst staat valt hij terug op de nieuwste beta,
+// want dan is dát het enige dat er te branden valt.
+func Pick(rels []Release) (Release, bool) {
+	for _, r := range rels {
+		if !r.Prerelease {
+			return r, true
+		}
+	}
+	if len(rels) > 0 {
+		return rels[0], true
+	}
+	return Release{}, false
 }
 
 // Images filtert de assets op flashbare kaart-images.

@@ -10,6 +10,8 @@ The desktop tool for [HopOS](https://gethop.org) nodes: **burn** a card, **confi
 
 ## Notes
 
+**Stable or beta, and which version.** HopOS ships betas too, so BURN opens on a line that says what you are about to write: the channel as a coloured tag — `stable` in phosphor, `beta` in copper — with the version number behind it. That number is the selector: every HopOS release carrying card images is in the list, newest first, so going back to the version your other nodes run is one click. The tool starts on the newest **stable**; a beta is something you choose, not something that happens to you. `./hop-imager -releases` prints the same list without opening a window.
+
 **One thing at a time.** The window opens on three buttons — BURN, CONFIGURE, FIND — each saying in one line what it does, and only the tools for the job you picked are on screen. Back is the arrow top left, or Escape. The 1-2-3 in the corner is the order a new node goes through, not a wizard: steps 2 and 3 stand on their own.
 
 **The config editor keeps its colours while you type.** There is no view mode to leave: one field, always editable, recoloured on every keystroke — section headers, comments, keys, values, JSON job lines, and secrets in copper so an open config shows you where its keys are.

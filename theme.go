@@ -43,6 +43,14 @@ var (
 	colWarn     = hopCopper
 )
 
+// De kanaal-kleuren: fosfor = de gewone weg (stable), koper = let op, dit is
+// een voorproefje (beta). Dezelfde koperkleur als een waarschuwing, want dat
+// is wat een prerelease is — geen fout, wel iets om te weten.
+var (
+	colStable = hopPhosphor
+	colBeta   = hopCopper
+)
+
 // hopTheme dwingt de huisstijl af, licht óf donker systeemthema — de site is
 // ook altijd donker. Alles wat hier niet genoemd wordt valt terug op het
 // donkere standaardthema.
