@@ -95,10 +95,11 @@ var boardNames = map[string]string{
 	"rpi4":        "Raspberry Pi 4",
 	"radxa-zero3": "Radxa Zero 3E",
 	"licheerv":    "LicheeRV Nano",
+	"m4":          "Mac mini M4",
 	"uefi":        "UEFI · USB stick",
 }
 
-var boardOrder = []string{"rpi5", "rpi4", "radxa-zero3", "licheerv", "uefi"}
+var boardOrder = []string{"rpi5", "rpi4", "radxa-zero3", "licheerv", "m4", "uefi"}
 
 type ui struct {
 	win fyne.Window
@@ -1025,8 +1026,8 @@ func (u *ui) setFlavor(fl string) {
 
 // rebuildBoards vult het knoppengrid: twee kolommen boards, het gekozen board
 // gevuld groen. Een board zonder de gekozen smaak staat er wél maar
-// uitgeschakeld (de LicheeRV is alleen headless) — verdwijnen zou lezen als
-// "board niet ondersteund", en dat is niet waar.
+// uitgeschakeld (de LicheeRV en de Mac mini zijn alleen headless) — verdwijnen
+// zou lezen als "board niet ondersteund", en dat is niet waar.
 func (u *ui) rebuildBoards() {
 	var cells []fyne.CanvasObject
 	for _, b := range u.boards {
