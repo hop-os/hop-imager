@@ -80,12 +80,12 @@ const bunny = `   (\(\
    o_(")(")   --------------
               the Go-only OS`
 
-// boardRow is één board uit de release: dezelfde kaart in (maximaal) twee
+// boardRow is één board uit de release: dezelfde kaart in (maximaal) drie
 // smaken. De knoppen tonen boards; de smaak-keuze erboven kiest het asset.
 type boardRow struct {
 	id       string
 	display  string
-	byFlavor map[string]release.Asset // "desktop" / "headless"
+	byFlavor map[string]release.Asset // "desktop" / "headless" / "media"
 }
 
 // boardNames maakt van de asset-id's mensennamen; onbekende id's tonen de id
@@ -94,31 +94,33 @@ var boardNames = map[string]string{
 	"rpi5":        "Raspberry Pi 5",
 	"rpi4":        "Raspberry Pi 4",
 	"radxa-zero3": "Radxa Zero 3E",
+	"o6n":         "Radxa Orion O6N",
+	"altra":       "Ampere Altra",
 	"licheerv":    "LicheeRV Nano",
 	"m4":          "Mac mini M4",
 	"uefi":        "UEFI · USB stick",
 }
 
-var boardOrder = []string{"rpi5", "rpi4", "radxa-zero3", "licheerv", "m4", "uefi"}
+var boardOrder = []string{"rpi5", "rpi4", "radxa-zero3", "o6n", "altra", "licheerv", "m4", "uefi"}
 
 type ui struct {
 	win fyne.Window
 
 	// BURN
-	releases                []release.Release
-	relRow                  *fyne.Container // de regel bovenin, herschikt als de pil verschijnt
-	relChan                 *tagPill        // stable of beta, gekleurd
-	relSel                  *widget.Select  // het versienummer erachter — en de keuze
-	relTag                  string
-	btnDesktop, btnHeadless *widget.Button
-	flavorVal               string
-	boardBox                *fyne.Container
-	boards                  []boardRow
-	selBoard                string
-	imageLbl                *widget.Label
-	imageTags               *fyne.Container
-	imagePath               string
-	keepCfg                 *widget.Check
+	releases   []release.Release
+	relRow     *fyne.Container // de regel bovenin, herschikt als de pil verschijnt
+	relChan    *tagPill        // stable of beta, gekleurd
+	relSel     *widget.Select  // het versienummer erachter — en de keuze
+	relTag     string
+	flavorBtns map[string]*widget.Button // "desktop" / "headless" / "media"
+	flavorVal  string
+	boardBox   *fyne.Container
+	boards     []boardRow
+	selBoard   string
+	imageLbl   *widget.Label
+	imageTags  *fyne.Container
+	imagePath  string
+	keepCfg    *widget.Check
 
 	// CONFIGURE
 	cfgEdit   *cfgEditor // gekleurd tekstveld (editor.go) — altijd bewerkbaar
@@ -382,13 +384,21 @@ func (u *ui) burnTab() fyne.CanvasObject {
 		u.relSel,
 	)
 
-	// Twee ONMISKENBARE knoppen (Derek 06-08: "die keuze moet echt
+	// ONMISKENBARE knoppen (Derek 06-08: "die keuze moet echt
 	// duidelijker!"): de gekozen smaak staat gevuld fosforgroen, de andere
-	// panel-grijs — een segmented control, geen radiootje.
-	u.btnDesktop = widget.NewButtonWithIcon("Desktop (GUI)", theme.ComputerIcon(), func() { u.setFlavor("desktop") })
-	u.btnHeadless = widget.NewButtonWithIcon("Headless", theme.VisibilityOffIcon(), func() { u.setFlavor("headless") })
+	// panel-grijs — een segmented control, geen radiootje. Media is de derde
+	// sinds HopOS v2.2.8: de GUI plus video-codec en optische drives, en net
+	// als headless een link-grens, geen instelling.
+	u.flavorBtns = map[string]*widget.Button{
+		"desktop":  widget.NewButtonWithIcon("Desktop (GUI)", theme.ComputerIcon(), func() { u.setFlavor("desktop") }),
+		"headless": widget.NewButtonWithIcon("Headless", theme.VisibilityOffIcon(), func() { u.setFlavor("headless") }),
+		"media":    widget.NewButtonWithIcon("Media", theme.MediaVideoIcon(), func() { u.setFlavor("media") }),
+	}
 	u.flavorVal = "desktop" // de default van elke release
-	flavorRow := container.NewGridWithColumns(2, u.btnDesktop, u.btnHeadless)
+	flavorRow := container.NewGridWithColumns(len(flavorOrder))
+	for _, fl := range flavorOrder {
+		flavorRow.Add(u.flavorBtns[fl])
+	}
 
 	// Twee kolommen board-knoppen — afbeeldingen van de bordjes kunnen hier
 	// later in (ButtonWithIcon of een eigen kaartje per bord).
@@ -954,17 +964,17 @@ func channelColor(ch string) color.Color {
 	return colStable
 }
 
+// flavorOrder is de volgorde van de smaakknoppen: gewoon, kaal, en de GUI met
+// codec erbij.
+var flavorOrder = []string{"desktop", "headless", "media"}
+
 // parseBoards groepeert de release-assets per board — de naamconventie van
-// tools/release.sh: hopos-<board>[-headless].img[.gz].
+// tools/release.sh: hopos-<board>[-headless|-media].img[.gz].
 func parseBoards(imgs []release.Asset) []boardRow {
 	byID := map[string]*boardRow{}
 	var extra []string
 	for _, a := range imgs {
-		base := strings.TrimSuffix(strings.TrimSuffix(a.Name, ".gz"), ".img")
-		flavor := "desktop"
-		if strings.HasSuffix(base, "-headless") {
-			flavor, base = "headless", strings.TrimSuffix(base, "-headless")
-		}
+		base, flavor := release.SplitFlavor(a.Name)
 		id := strings.TrimPrefix(base, "hopos-")
 		b := byID[id]
 		if b == nil {
@@ -996,15 +1006,13 @@ func (u *ui) flavor() string { return u.flavorVal }
 // (HighImportance → fosforgroen uit het thema), de andere neutraal.
 func (u *ui) setFlavor(fl string) {
 	u.flavorVal = fl
-	u.btnDesktop.Importance = widget.MediumImportance
-	u.btnHeadless.Importance = widget.MediumImportance
-	if fl == "desktop" {
-		u.btnDesktop.Importance = widget.HighImportance
-	} else {
-		u.btnHeadless.Importance = widget.HighImportance
+	for f, btn := range u.flavorBtns {
+		btn.Importance = widget.MediumImportance
+		if f == fl {
+			btn.Importance = widget.HighImportance
+		}
+		btn.Refresh()
 	}
-	u.btnDesktop.Refresh()
-	u.btnHeadless.Refresh()
 	u.rebuildBoards()
 	// Stond er al een board geselecteerd, dan volgt het image de nieuwe smaak
 	// vanzelf — Type + Device sámen zijn de keuze.
@@ -1026,8 +1034,9 @@ func (u *ui) setFlavor(fl string) {
 
 // rebuildBoards vult het knoppengrid: twee kolommen boards, het gekozen board
 // gevuld groen. Een board zonder de gekozen smaak staat er wél maar
-// uitgeschakeld (de LicheeRV en de Mac mini zijn alleen headless) — verdwijnen
-// zou lezen als "board niet ondersteund", en dat is niet waar.
+// uitgeschakeld (de LicheeRV en de Mac mini zijn alleen headless, media is er
+// alleen waar een codec-blok zit) — verdwijnen zou lezen als "board niet
+// ondersteund", en dat is niet waar.
 func (u *ui) rebuildBoards() {
 	var cells []fyne.CanvasObject
 	for _, b := range u.boards {
@@ -1103,10 +1112,18 @@ func (u *ui) setImage(path string) {
 	// want die meet tekst op en dat mag alleen daar (zie loadConfig).
 	label, col := "no config window", colWarn
 	if w, err := cfgwin.Find(f); err == nil {
-		if content, cerr := cfgwin.Content(f, w); cerr == nil && isDesktop(content) {
+		content, cerr := cfgwin.Content(f, w)
+		switch {
+		// Media draagt dezelfde config als desktop — het verschil is gelinkte
+		// code, niet een regel in het venster. Hier mag de naam dus wél
+		// meebeslissen, maar alleen bovenop een config die beeld claimt.
+		case cerr == nil && isDesktop(content) && isMediaName(path):
+			label, col = "media", colMedia
+			u.log(fmt.Sprintf("Image ready: media — the GUI plus video codec and optical drives (config window at %#x).", w.Off))
+		case cerr == nil && isDesktop(content):
 			label, col = "desktop", colDesktop
 			u.log(fmt.Sprintf("Image ready: desktop — boots into the GUI (config window at %#x).", w.Off))
-		} else {
+		default:
 			label, col = "headless", colHeadless
 			u.log(fmt.Sprintf("Image ready: headless — API + network console (config window at %#x).", w.Off))
 		}
@@ -1118,6 +1135,12 @@ func (u *ui) setImage(path string) {
 		u.imageTags.Objects = []fyne.CanvasObject{pill(label, col)}
 		u.imageTags.Refresh()
 	})
+}
+
+// isMediaName herkent een media-image aan de naam uit tools/release.sh.
+func isMediaName(path string) bool {
+	_, fl := release.SplitFlavor(filepath.Base(path))
+	return fl == "media"
 }
 
 // isDesktop kijkt in de config zelf: een desktop-node is een node waar iets het

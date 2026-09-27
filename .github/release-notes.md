@@ -10,6 +10,10 @@ The desktop tool for [HopOS](https://gethop.org) nodes: **burn** a card, **confi
 
 ## Notes
 
+**Three types: Desktop, Headless, Media.** HopOS v2.2.8 ships a third flavour, and BURN has a third button for it: *Media* is the GUI plus the hardware video codec and USB optical drives — code that the Desktop and Headless images do not link at all. Today only the Radxa Orion O6N has a codec block to switch on, so under Media the other boards stay visible but disabled. The image tag says `media` in phosphor. Media carries the same config as Desktop, so for this one tag the tool goes by the file name (`*-media.img`) rather than the config alone.
+
+**The Radxa Orion O6N and Ampere Altra are in the board list.** Both boot through their own UEFI from a USB stick, and BURN calls them by name. Older HopOS versions that still carry the generic UEFI stick keep showing it.
+
 **Stable or beta, and which version.** HopOS ships betas too, so BURN opens on a line that says what you are about to write: the channel as a coloured tag — `stable` in phosphor, `beta` in copper — with the version number behind it. That number is the selector: every HopOS release carrying card images is in the list, newest first, so going back to the version your other nodes run is one click. The tool starts on the newest **stable**; a beta is something you choose, not something that happens to you. `./hop-imager -releases` prints the same list without opening a window.
 
 **The Mac mini M4 is in the board list.** HopOS builds a card image for it, so BURN calls it by its name — *Mac mini M4* — in its own place between the boards and the generic UEFI stick, instead of showing the bare asset id at the bottom. The port is headless-only for now, so under *Desktop* its button stays visible but disabled: that is a fact about the port, not a missing download.

@@ -37,12 +37,14 @@ The tool opens on the **newest stable**. A beta is something you choose, not
 something that happens to you.
 
 Pick the **type** next: *Desktop* boots into the HopOS GUI, *Headless* is a
-node with no display code linked at all — API plus network console. Then pick
-your **board**; version, type and board together select the image, so switching
-one of the three keeps the other two and fetches the matching file. A board
-without that flavour stays visible but disabled (the LicheeRV Nano and the Mac
-mini M4 are headless-only — that is a fact about the port, not a missing
-download).
+node with no display code linked at all — API plus network console, and *Media*
+is the GUI plus the hardware video codec and USB optical drives, code the other
+two do not link. Then pick your **board**; version, type and board together
+select the image, so switching one of the three keeps the other two and fetches
+the matching file. A board without that flavour stays visible but disabled (the
+LicheeRV Nano and the Mac mini M4 are headless-only, and only the Radxa Orion
+O6N has a codec block to switch on — that is a fact about the port, not a
+missing download).
 
 The image is downloaded once and cached. Insert a card or a USB stick and it
 appears in **TARGET** by itself; if it is the only one, it is already selected.

@@ -35,10 +35,12 @@ var (
 	transparent = color.NRGBA{}
 )
 
-// De tag-kleuren volgen het palet: leaf = er komt beeld uit, wave = op
-// afstand (API/console), copper = let op.
+// De tag-kleuren volgen het palet: leaf = er komt beeld uit, phosphor = beeld
+// en meer (media: codec en disc erbij), wave = op afstand (API/console),
+// copper = let op.
 var (
 	colDesktop  = hopLeaf
+	colMedia    = hopPhosphor
 	colHeadless = hopWave
 	colWarn     = hopCopper
 )

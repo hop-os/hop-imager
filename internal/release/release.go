@@ -125,14 +125,19 @@ func Images(assets []Asset) []Asset {
 	return out
 }
 
-// Flavor leidt de smaak af uit de asset-naam — release.sh-conventie:
-// hopos-<board>[-headless].img.gz, geen suffix = desktop (gui). Ná download
-// verifieert de UI dit uit het config-venster zelf (main.flavorOf).
-func Flavor(name string) string {
-	if strings.Contains(name, "-headless") {
-		return "headless"
+// SplitFlavor splitst een asset-naam in de basis en de smaak — release.sh-
+// conventie: hopos-<board>[-headless|-media].img[.gz], geen suffix = desktop
+// (gui). Ná download verifieert de UI dit uit het config-venster zelf
+// (main.setImage); alleen media is daar niet te zien, want die draagt dezelfde
+// config als desktop.
+func SplitFlavor(name string) (base, flavor string) {
+	base = strings.TrimSuffix(strings.TrimSuffix(name, ".gz"), ".img")
+	for _, fl := range []string{"headless", "media"} {
+		if strings.HasSuffix(base, "-"+fl) {
+			return strings.TrimSuffix(base, "-"+fl), fl
+		}
 	}
-	return "desktop"
+	return base, "desktop"
 }
 
 // Download haalt een asset naar dir en geeft het lokale pad terug. Een
