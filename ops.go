@@ -212,11 +212,11 @@ func opWrite(imagePath, target string, keepConfig bool, phase func(string), prog
 	}
 	if def, derr := cfgwin.Content(img, w); derr == nil {
 		res.NewKeys = missingKeys(kept, def)
-		// Een desktop-config op een headless image zaait een display-job die
-		// het glas nooit krijgt: in een headless build zit geen grant-provider.
-		// Stille mismatch, dus hardop zeggen.
-		if isDesktop(kept) && !isDesktop(def) {
-			res.Warning = "your config seeds a desktop, but this is a headless image — the display job will never get the framebuffer. Switch to the desktop image, or drop those jobs in CONFIGURE."
+		// Een config met de display-job op een headless image zaait een job
+		// die het glas nooit krijgt: in een kern zonder gui-feature zit geen
+		// framebuffer-grant. Stille mismatch, dus hardop zeggen.
+		if seedsGlass(kept) && !imageHasGlass(img.Name(), def) {
+			res.Warning = "your config gives the screen to the display app, but this is a headless image — that job will never get the framebuffer. Switch to the headfull image, or drop the display job in CONFIGURE."
 		}
 	}
 	if err := cfgwin.Replace(out.File, w, kept); err != nil {

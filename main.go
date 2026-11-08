@@ -17,12 +17,13 @@
 // autorisatie-dialoog per bewerking, en al het werk in dit proces (dus ook
 // live voortgang).
 //
-// FIND leunt op de console-poort die élke meegeleverde config aanzet
-// (hopos.console=5555): één TCP-connect levert de identificatie én de naam,
-// architectuur en staat van de node — zie internal/find.
+// FIND leunt op de console-poort die beide meegeleverde configs aanzetten
+// (hopos.console=1, tcp/5555): één TCP-connect levert de identificatie én de
+// naam, architectuur, versie en staat van de node — zie internal/find.
 //
-// Eigen repo en eigen module, náást HopOS zelf: Fyne (cgo, OpenGL) hoort niet
-// in de metal-module, en deze tool heeft zijn eigen ritme. macOS eerst;
+// Eigen repo en eigen module, náást HopOS zelf: HopOS is sinds v3 een
+// Rust-workspace, deze tool blijft Go met Fyne (cgo, OpenGL), en hij heeft
+// zijn eigen ritme. macOS eerst;
 // Windows/Linux = internal/disk en internal/priv invullen, de rest is
 // platform-neutraal.
 //
@@ -34,7 +35,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"fmt"
@@ -52,6 +52,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -74,34 +75,43 @@ var iconPNG []byte
 var version = "dev"
 
 // bunny: Dereks origineel (2026-07-11) — hetzelfde logo dat elke node bij het
-// booten toont (metal/cmd/hopos/main.go), dus de tool en het glas matchen.
+// booten toont (BUNNY in hopos/src/main.rs), dus de tool en het glas matchen.
 const bunny = `   (\(\
    ( -.-)     HopOS
    o_(")(")   --------------
-              the Go-only OS`
+              the Rust-only OS`
 
-// boardRow is één board uit de release: dezelfde kaart in (maximaal) drie
-// smaken. De knoppen tonen boards; de smaak-keuze erboven kiest het asset.
+// boardRow is één board uit de release: dezelfde kaart in twee smaken (v3:
+// headless en headfull) of drie (v2: desktop, headless en media). De knoppen
+// tonen boards; de smaak-keuze erboven kiest het asset.
 type boardRow struct {
 	id       string
 	display  string
-	byFlavor map[string]release.Asset // "desktop" / "headless" / "media"
+	byFlavor map[string]release.Asset // release.Headless / Headfull / Desktop / Media
 }
 
 // boardNames maakt van de asset-id's mensennamen; onbekende id's tonen de id
 // zelf, zodat een nieuw board in de release nooit onzichtbaar is.
 var boardNames = map[string]string{
-	"rpi5":        "Raspberry Pi 5",
-	"rpi4":        "Raspberry Pi 4",
-	"radxa-zero3": "Radxa Zero 3E",
-	"o6n":         "Radxa Orion O6N",
-	"altra":       "Ampere Altra",
-	"licheerv":    "LicheeRV Nano",
-	"m4":          "Mac mini M4",
-	"uefi":        "UEFI · USB stick",
+	"rpi5":     "Raspberry Pi 5",
+	"rpi4":     "Raspberry Pi 4",
+	"radxa":    "Radxa Zero 3E",
+	"o6n":      "Radxa Orion O6N",
+	"altra":    "Ampere Altra",
+	"licheerv": "LicheeRV Nano",
+	"apple":    "Mac mini M4",
+	"uefi":     "UEFI · USB stick",
 }
 
-var boardOrder = []string{"rpi5", "rpi4", "radxa-zero3", "o6n", "altra", "licheerv", "m4", "uefi"}
+// boardAlias: dezelfde machine onder de id van de Go-generatie (v2). v3 noemt
+// de Radxa en de Mac mini anders in zijn asset-namen; onder één id blijft een
+// gekozen board gekozen als je tussen een v2- en een v3-versie wisselt.
+var boardAlias = map[string]string{
+	"radxa-zero3": "radxa",
+	"m4":          "apple",
+}
+
+var boardOrder = []string{"rpi5", "rpi4", "radxa", "o6n", "altra", "licheerv", "apple", "uefi"}
 
 type ui struct {
 	win fyne.Window
@@ -112,7 +122,8 @@ type ui struct {
 	relChan    *tagPill        // stable of beta, gekleurd
 	relSel     *widget.Select  // het versienummer erachter — en de keuze
 	relTag     string
-	flavorBtns map[string]*widget.Button // "desktop" / "headless" / "media"
+	flavorBtns map[string]*widget.Button // per smaak; flavorRow toont die van de release
+	flavorRow  *fyne.Container
 	flavorVal  string
 	boardBox   *fyne.Container
 	boards     []boardRow
@@ -386,24 +397,23 @@ func (u *ui) burnTab() fyne.CanvasObject {
 
 	// ONMISKENBARE knoppen (Derek 06-08: "die keuze moet echt
 	// duidelijker!"): de gekozen smaak staat gevuld fosforgroen, de andere
-	// panel-grijs — een segmented control, geen radiootje. Media is de derde
-	// sinds HopOS v2.2.8: de GUI plus video-codec en optische drives, en net
-	// als headless een link-grens, geen instelling.
+	// panel-grijs — een segmented control, geen radiootje. Welke knoppen er
+	// staan hangt af van de release: HopOS v3 heeft er twee (headfull =
+	// de kern met gui, op de O6N ook media; headless = zonder), de
+	// Go-generatie had er drie. Een smaak is een link-grens, geen instelling.
 	u.flavorBtns = map[string]*widget.Button{
-		"desktop":  widget.NewButtonWithIcon("Desktop (GUI)", theme.ComputerIcon(), func() { u.setFlavor("desktop") }),
-		"headless": widget.NewButtonWithIcon("Headless", theme.VisibilityOffIcon(), func() { u.setFlavor("headless") }),
-		"media":    widget.NewButtonWithIcon("Media", theme.MediaVideoIcon(), func() { u.setFlavor("media") }),
+		release.Headfull: widget.NewButtonWithIcon("Headfull (GUI)", theme.ComputerIcon(), func() { u.setFlavor(release.Headfull) }),
+		release.Desktop:  widget.NewButtonWithIcon("Desktop (GUI)", theme.ComputerIcon(), func() { u.setFlavor(release.Desktop) }),
+		release.Headless: widget.NewButtonWithIcon("Headless", theme.VisibilityOffIcon(), func() { u.setFlavor(release.Headless) }),
+		release.Media:    widget.NewButtonWithIcon("Media", theme.MediaVideoIcon(), func() { u.setFlavor(release.Media) }),
 	}
-	u.flavorVal = "desktop" // de default van elke release
-	flavorRow := container.NewGridWithColumns(len(flavorOrder))
-	for _, fl := range flavorOrder {
-		flavorRow.Add(u.flavorBtns[fl])
-	}
+	u.flavorRow = container.NewGridWithColumns(2)
+	u.showFlavors([]string{release.Headfull, release.Headless})
 
 	// Twee kolommen board-knoppen — afbeeldingen van de bordjes kunnen hier
 	// later in (ButtonWithIcon of een eigen kaartje per bord).
 	u.boardBox = container.NewGridWithColumns(2)
-	u.setFlavor("desktop")
+	u.setFlavor(release.Headless)
 
 	localBtn := widget.NewButtonWithIcon("Choose your own…", theme.FolderOpenIcon(), u.pickLocal)
 	u.imageLbl = widget.NewLabel("no image selected")
@@ -433,7 +443,7 @@ func (u *ui) burnTab() fyne.CanvasObject {
 	return container.NewBorder(
 		container.NewVBox(
 			u.relRow,
-			section("Type"), flavorRow,
+			section("Type"), u.flavorRow,
 			section("Device"), u.boardBox,
 			chosenRow,
 			widget.NewSeparator(),
@@ -643,14 +653,14 @@ func (u *ui) loadConfig(target string) {
 	}
 	out := string(content)
 	u.cfgTarget = target
-	desktop := isDesktop(content)
+	headfull := looksHeadfull(content)
 	fyne.Do(func() {
 		// De pill MOET hier gemaakt worden en niet erbuiten: hij meet tekst op,
 		// en de tekstmeter van Fyne mag alleen van de UI-thread komen (anders
 		// crasht de shaper — gemeten 07-08).
 		tag := pill("headless", colHeadless)
-		if desktop {
-			tag = pill("desktop", colDesktop)
+		if headfull {
+			tag = pill("headfull", colDesktop)
 		}
 		u.cfgEdit.SetText(out)
 		u.cfgLbl.SetText(target)
@@ -926,6 +936,14 @@ func (u *ui) applyRelease(rel release.Release) {
 	u.relRow.Refresh() // de pil verschijnt (of wordt breder): de regel moet opnieuw geschikt
 	u.relSel.SetSelected(rel.Tag)
 	u.boards = parseBoards(release.Images(rel.Assets))
+	// De knoppen van déze release, en een smaak die hier bestaat: van een
+	// v3-versie naar een v2-versie wordt headfull desktop en omgekeerd.
+	avail := releaseFlavors(u.boards)
+	u.showFlavors(avail)
+	if fl := equivalentFlavor(u.flavorVal, avail); fl != u.flavorVal {
+		u.flavorVal = fl
+		u.paintFlavors()
+	}
 	u.rebuildBoards()
 	// Dezelfde versie opnieuw (de verversknop) is géén nieuwe keuze: dan niets
 	// zeggen en vooral niet opnieuw gaan downloaden — een .img.gz is niet
@@ -964,18 +982,72 @@ func channelColor(ch string) color.Color {
 	return colStable
 }
 
-// flavorOrder is de volgorde van de smaakknoppen: gewoon, kaal, en de GUI met
-// codec erbij.
-var flavorOrder = []string{"desktop", "headless", "media"}
+// flavorOrder is de volgorde van de smaakknoppen: eerst met glas, dan kaal,
+// dan de GUI met codec erbij (v2). Een release toont alleen wat hij heeft.
+var flavorOrder = []string{release.Headfull, release.Desktop, release.Headless, release.Media}
+
+// releaseFlavors: de smaken die in een release voorkomen, in knopvolgorde.
+func releaseFlavors(boards []boardRow) []string {
+	var out []string
+	for _, fl := range flavorOrder {
+		for _, b := range boards {
+			if _, ok := b.byFlavor[fl]; ok {
+				out = append(out, fl)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// equivalentFlavor kiest in een andere release dezelfde soort kaart: met glas
+// blijft met glas (headfull ↔ desktop, en media valt in v3 onder headfull),
+// kaal blijft kaal. Bestaat die niet, dan headless — dat heeft elk board.
+func equivalentFlavor(fl string, avail []string) string {
+	if slices.Contains(avail, fl) || len(avail) == 0 {
+		return fl
+	}
+	for _, alt := range map[string][]string{
+		release.Headfull: {release.Desktop},
+		release.Desktop:  {release.Headfull},
+		release.Media:    {release.Headfull, release.Desktop},
+	}[fl] {
+		if slices.Contains(avail, alt) {
+			return alt
+		}
+	}
+	if slices.Contains(avail, release.Headless) {
+		return release.Headless
+	}
+	return avail[0]
+}
+
+// showFlavors zet de knoppen van een release in de rij.
+func (u *ui) showFlavors(avail []string) {
+	if len(avail) == 0 {
+		return
+	}
+	objs := make([]fyne.CanvasObject, len(avail))
+	for i, fl := range avail {
+		objs[i] = u.flavorBtns[fl]
+	}
+	u.flavorRow.Layout = layout.NewGridLayoutWithColumns(len(avail))
+	u.flavorRow.Objects = objs
+	u.flavorRow.Refresh()
+}
 
 // parseBoards groepeert de release-assets per board — de naamconventie van
-// tools/release.sh: hopos-<board>[-headless|-media].img[.gz].
+// tools/release.sh: hopos-<board>-<headless|headfull>.img.gz (v3) of
+// hopos-<board>[-headless|-media].img.gz (v2).
 func parseBoards(imgs []release.Asset) []boardRow {
 	byID := map[string]*boardRow{}
 	var extra []string
 	for _, a := range imgs {
 		base, flavor := release.SplitFlavor(a.Name)
 		id := strings.TrimPrefix(base, "hopos-")
+		if canon, ok := boardAlias[id]; ok {
+			id = canon
+		}
 		b := byID[id]
 		if b == nil {
 			display := boardNames[id]
@@ -1006,13 +1078,7 @@ func (u *ui) flavor() string { return u.flavorVal }
 // (HighImportance → fosforgroen uit het thema), de andere neutraal.
 func (u *ui) setFlavor(fl string) {
 	u.flavorVal = fl
-	for f, btn := range u.flavorBtns {
-		btn.Importance = widget.MediumImportance
-		if f == fl {
-			btn.Importance = widget.HighImportance
-		}
-		btn.Refresh()
-	}
+	u.paintFlavors()
 	u.rebuildBoards()
 	// Stond er al een board geselecteerd, dan volgt het image de nieuwe smaak
 	// vanzelf — Type + Device sámen zijn de keuze.
@@ -1032,10 +1098,21 @@ func (u *ui) setFlavor(fl string) {
 	}
 }
 
+// paintFlavors kleurt de smaakknoppen naar de gekozen smaak.
+func (u *ui) paintFlavors() {
+	for f, btn := range u.flavorBtns {
+		btn.Importance = widget.MediumImportance
+		if f == u.flavorVal {
+			btn.Importance = widget.HighImportance
+		}
+		btn.Refresh()
+	}
+}
+
 // rebuildBoards vult het knoppengrid: twee kolommen boards, het gekozen board
 // gevuld groen. Een board zonder de gekozen smaak staat er wél maar
-// uitgeschakeld (de LicheeRV en de Mac mini zijn alleen headless, media is er
-// alleen waar een codec-blok zit) — verdwijnen zou lezen als "board niet
+// uitgeschakeld (de LicheeRV en de Mac mini zijn alleen headless: hun kern
+// heeft geen gui-feature) — verdwijnen zou lezen als "board niet
 // ondersteund", en dat is niet waar.
 func (u *ui) rebuildBoards() {
 	var cells []fyne.CanvasObject
@@ -1096,9 +1173,12 @@ func (u *ui) pickLocal() {
 	fd.Show()
 }
 
-// setImage kiest het image en zet de tags ernaast: de smaak komt uit het
-// config-venster zélf (niet uit de naam — werkt dus ook voor lokale of
-// hernoemde images), en een image zonder venster krijgt dat als oranje tag.
+// setImage kiest het image en zet de tags ernaast. De smaak komt bij v3 uit de
+// naam: hij staat er altijd in (-headless/-headfull), en de config kan hem niet
+// vertellen — headless of headfull is een feature van de kern, geen regel in
+// het venster. Zonder smaak in de naam (v2, of een eigen of hernoemd image)
+// beslist het config-venster zelf, zoals in de Go-generatie. Een image zonder
+// venster krijgt dat als oranje tag.
 func (u *ui) setImage(path string) {
 	u.imagePath = path
 	f, err := os.Open(path)
@@ -1113,14 +1193,24 @@ func (u *ui) setImage(path string) {
 	label, col := "no config window", colWarn
 	if w, err := cfgwin.Find(f); err == nil {
 		content, cerr := cfgwin.Content(f, w)
+		_, named := release.SplitFlavor(filepath.Base(path))
 		switch {
-		// Media draagt dezelfde config als desktop — het verschil is gelinkte
-		// code, niet een regel in het venster. Hier mag de naam dus wél
+		case named == release.Headfull && isMediaBoard(path):
+			label, col = "headfull", colMedia
+			u.log(fmt.Sprintf("Image ready: headfull — the GUI plus the video codec and optical drives (config window at %#x, %d KB).", w.Off, w.Size>>10))
+		case named == release.Headfull:
+			label, col = "headfull", colDesktop
+			u.log(fmt.Sprintf("Image ready: headfull — a kernel with the GUI (config window at %#x, %d KB).", w.Off, w.Size>>10))
+		case named == release.Headless:
+			label, col = "headless", colHeadless
+			u.log(fmt.Sprintf("Image ready: headless — no GUI linked, API + network console (config window at %#x, %d KB).", w.Off, w.Size>>10))
+		// Media (v2) draagt dezelfde config als desktop — het verschil is
+		// gelinkte code, niet een regel in het venster. Hier mag de naam dus
 		// meebeslissen, maar alleen bovenop een config die beeld claimt.
-		case cerr == nil && isDesktop(content) && isMediaName(path):
+		case cerr == nil && seedsGlass(content) && named == release.Media:
 			label, col = "media", colMedia
 			u.log(fmt.Sprintf("Image ready: media — the GUI plus video codec and optical drives (config window at %#x).", w.Off))
-		case cerr == nil && isDesktop(content):
+		case cerr == nil && looksHeadfull(content):
 			label, col = "desktop", colDesktop
 			u.log(fmt.Sprintf("Image ready: desktop — boots into the GUI (config window at %#x).", w.Off))
 		default:
@@ -1137,17 +1227,70 @@ func (u *ui) setImage(path string) {
 	})
 }
 
-// isMediaName herkent een media-image aan de naam uit tools/release.sh.
-func isMediaName(path string) bool {
-	_, fl := release.SplitFlavor(filepath.Base(path))
-	return fl == "media"
+// isMediaBoard: de O6N is het enige board met een codec-blok; zijn headfull-
+// image is de media-smaak (tools/release.sh in HopOS, MEDIA=1).
+func isMediaBoard(path string) bool {
+	base, _ := release.SplitFlavor(filepath.Base(path))
+	return base == "hopos-o6n"
 }
 
-// isDesktop kijkt in de config zelf: een desktop-node is een node waar iets het
-// glas claimt (FB=1) of de display-job geseed staat — betrouwbaarder dan een
-// bestandsnaam.
-func isDesktop(cfg []byte) bool {
-	return bytes.Contains(cfg, []byte(`"FB":"1"`)) || bytes.Contains(cfg, []byte(`"name":"display"`))
+// activeLines geeft de regels van een config die geen commentaar zijn. De
+// headfull.cfg van HopOS v3 draagt de display-job als UITgezette regel
+// ("#hopos.init[]=…display…"): wie op de hele tekst zoekt, ziet een job die er
+// niet is.
+func activeLines(cfg []byte) []string {
+	var out []string
+	for _, l := range strings.Split(string(cfg), "\n") {
+		if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "#") {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// seedsGlass: de config geeft het glas aan een app — de display-job (v3:
+// "GUI":"display", v2: "FB":"1"). Zo'n config hoort op een kern met de
+// gui-feature; op een headless kern krijgt die job nooit een framebuffer.
+func seedsGlass(cfg []byte) bool {
+	for _, l := range activeLines(cfg) {
+		if strings.Contains(l, `"name":"display"`) || strings.Contains(l, `"FB":"1"`) ||
+			strings.Contains(l, `"GUI":"display"`) {
+			return true
+		}
+	}
+	return false
+}
+
+// imageHasGlass: linkt dit image de gui? De naam weet het zeker (v3 draagt de
+// smaak er altijd in, v2 had desktop zonder suffix en media); zonder herkenbare
+// naam beslist de default-config, zoals in de Go-generatie: geeft hij het glas
+// aan een app, dan is het een image met beeld.
+func imageHasGlass(path string, def []byte) bool {
+	base, fl := release.SplitFlavor(filepath.Base(path))
+	switch {
+	case fl == release.Headfull, fl == release.Media:
+		return true
+	case fl == release.Headless:
+		return false
+	case fl == release.Desktop && strings.HasPrefix(base, "hopos-"):
+		return true
+	}
+	return seedsGlass(def)
+}
+
+// looksHeadfull: de config van een node met glas — de display-job, of welcome
+// (wat headfull.cfg van HopOS v3 zaait en headless.cfg niet). Een gok uit de
+// config, voor de tag; de kern zelf beslist.
+func looksHeadfull(cfg []byte) bool {
+	if seedsGlass(cfg) {
+		return true
+	}
+	for _, l := range activeLines(cfg) {
+		if strings.Contains(l, `"name":"welcome"`) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- devices --------------------------------------------------------------------

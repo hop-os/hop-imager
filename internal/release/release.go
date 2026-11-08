@@ -125,19 +125,29 @@ func Images(assets []Asset) []Asset {
 	return out
 }
 
-// SplitFlavor splitst een asset-naam in de basis en de smaak — release.sh-
-// conventie: hopos-<board>[-headless|-media].img[.gz], geen suffix = desktop
-// (gui). Ná download verifieert de UI dit uit het config-venster zelf
-// (main.setImage); alleen media is daar niet te zien, want die draagt dezelfde
-// config als desktop.
+// De smaken, in het woord van de asset-naam. HopOS v3 (Rust) kent er twee,
+// allebei met de smaak in de naam: headless en headfull (gui, en op de O6N
+// ook media). De Go-generatie (v2) kende er drie: geen suffix = desktop,
+// -headless en -media. Beide staan in de versielijst, dus beide moeten hier
+// herkend worden.
+const (
+	Headless = "headless"
+	Headfull = "headfull" // v3: de kern met gui (en media op de O6N)
+	Desktop  = "desktop"  // v2: geen suffix
+	Media    = "media"    // v2: gui plus codec en optische drives
+)
+
+// SplitFlavor splitst een asset-naam in de basis en de smaak — de conventie
+// van tools/release.sh: hopos-<board>-<headless|headfull>.img.gz in v3,
+// hopos-<board>[-headless|-media].img.gz in v2 (geen suffix = desktop).
 func SplitFlavor(name string) (base, flavor string) {
 	base = strings.TrimSuffix(strings.TrimSuffix(name, ".gz"), ".img")
-	for _, fl := range []string{"headless", "media"} {
+	for _, fl := range []string{Headless, Headfull, Media} {
 		if strings.HasSuffix(base, "-"+fl) {
 			return strings.TrimSuffix(base, "-"+fl), fl
 		}
 	}
-	return base, "desktop"
+	return base, Desktop
 }
 
 // Download haalt een asset naar dir en geeft het lokale pad terug. Een

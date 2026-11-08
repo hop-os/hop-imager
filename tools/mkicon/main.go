@@ -31,8 +31,8 @@ var (
 	phosphor = color.NRGBA{0x46, 0xD9, 0x79, 0xFF} // --phosphor
 )
 
-// De bunny zoals hij in de node staat (metal/cmd/hopos/main.go). Alleen het
-// dier: "HopOS / the Go-only OS" staat er in de app naast en zou een vierkant
+// De bunny zoals hij in de node staat (hopos/src/main.rs). Alleen het
+// dier: "HopOS / the Rust-only OS" staat er in de app naast en zou een vierkant
 // icoon plat drukken.
 var bunny = []string{
 	`(\(\`,

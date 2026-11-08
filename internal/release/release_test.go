@@ -45,3 +45,22 @@ func TestPickFallsBackToBeta(t *testing.T) {
 		t.Fatal("Pick op een lege lijst hoort niets te kiezen")
 	}
 }
+
+// De asset-namen van beide generaties: v3 draagt de smaak altijd in de naam
+// (headless/headfull), v2 kende geen suffix voor desktop.
+func TestSplitFlavor(t *testing.T) {
+	for name, want := range map[string][2]string{
+		"hopos-rpi4-headless.img.gz":  {"hopos-rpi4", Headless},
+		"hopos-rpi4-headfull.img.gz":  {"hopos-rpi4", Headfull},
+		"hopos-o6n-headfull.img.gz":   {"hopos-o6n", Headfull},
+		"hopos-apple-headless.img.gz": {"hopos-apple", Headless},
+		"hopos-radxa-zero3.img.gz":    {"hopos-radxa-zero3", Desktop},
+		"hopos-o6n-media.img.gz":      {"hopos-o6n", Media},
+		"hopos-licheerv-headless.img": {"hopos-licheerv", Headless},
+	} {
+		base, fl := SplitFlavor(name)
+		if base != want[0] || fl != want[1] {
+			t.Errorf("SplitFlavor(%q) = %q, %q; wil %q, %q", name, base, fl, want[0], want[1])
+		}
+	}
+}

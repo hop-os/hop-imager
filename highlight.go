@@ -1,6 +1,6 @@
 // highlight.go — kleuren voor een hopos.cfg, en alleen voor wat dat formaat
 // ÉCHT kan. Geen parser-bibliotheek, geen taalgrammatica: de config is
-// regel-gebaseerd (`key=value`, `#` is commentaar — zie fw/bootcfg in HopOS), en
+// regel-gebaseerd (`key=value`, `#` is commentaar — zie fw/src/bootcfg.rs in HopOS), en
 // dat is met een handvol regels te lezen.
 //
 // Dit bestand maakt geen plaatje maar een lijst SEGMENTEN: stukjes tekst met
@@ -13,7 +13,7 @@
 //	grijs        commentaar, en de tekens die alleen structuur zijn (= { } : ,)
 //	blauw        de sleutel
 //	wit          de waarde
-//	koper        de waarde van een GEHEIM (apikey, s3.secret, s3.key) én getallen
+//	koper        de waarde van een GEHEIM (apikey, s3.secret, s3.key, lock.apikey) én getallen
 //	leafgroen    strings binnen een JSON-jobregel
 //
 // Die koperen geheimen zijn geen versiering: een config die open op je scherm
@@ -40,13 +40,15 @@ const (
 	cNumber  fyne.ThemeColorName = "hopNumber"
 )
 
-// secretKeys zijn de sleutels waarvan de WAARDE een geheim is. Precies deze
-// drie, uit docs/config.md — niet gokken op namen die "key" bevatten, want
-// hopos.s3.pathstyle en hopos.apps[] zijn dat niet.
+// secretKeys zijn de sleutels waarvan de WAARDE een geheim is: de drie die de
+// kern van HopOS v3 nooit op de console zet (SECRETS in kern/src/nodecfg.rs:
+// apikey, s3.secret, lock.apikey), plus de S3-sleutel-id. Niet gokken op namen
+// die "key" bevatten, want hopos.s3.pathstyle en hopos.lock.key zijn dat niet.
 var secretKeys = map[string]bool{
-	"hopos.apikey":    true,
-	"hopos.s3.secret": true,
-	"hopos.s3.key":    true,
+	"hopos.apikey":      true,
+	"hopos.s3.secret":   true,
+	"hopos.s3.key":      true,
+	"hopos.lock.apikey": true,
 }
 
 // run is een stuk tekst van één kleur.
