@@ -44,7 +44,7 @@ const (
 const (
 	descBurn      = "Write a HopOS release — stable or beta — to a card or USB stick, and read it back to prove it landed."
 	descConfigure = "Change the config of a card you already burned: its name, its keys, the jobs it runs."
-	descFind      = "Find the HopOS nodes that are running on your network, and open their screen."
+	descFind      = "Find the HopOS nodes that are running on your network, and open what they serve."
 )
 
 // bigCard is een knop met een kop, een regel uitleg en een licht stapnummer.

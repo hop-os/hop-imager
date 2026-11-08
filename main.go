@@ -290,7 +290,14 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		st := find.Scan(ctx, hosts, find.DefaultPort, func(nd find.Node) {
-			fmt.Printf("%-15s  %-16s  %-8s  %-22s  api-open=%v\n", nd.IP, nd.Name, nd.Arch, nd.State, nd.InsecND)
+			ver := "?"
+			switch {
+			case nd.Version != "":
+				ver = "v" + nd.Version
+			case nd.Go:
+				ver = "v2"
+			}
+			fmt.Printf("%-15s  %-16s  %-8s  %-12s  %-22s  api-open=%v\n", nd.IP, nd.Name, nd.Arch, ver, nd.State, nd.InsecND)
 		}, nil)
 		fmt.Fprintf(os.Stderr, "%d node(s) found\n", st.Found)
 		return
@@ -712,11 +719,12 @@ func (u *ui) findTab() fyne.CanvasObject {
 			name := widget.NewLabel("template")
 			name.Truncation = fyne.TextTruncateEllipsis
 			flavor, state := newTagPill(), newTagPill()
-			// Twee knoppen per node: GUI = het beeld van de node zelf (/kvm
-			// op poort 80), Manage = de node beheren op gui.gethop.org.
+			// Twee knoppen per node: Web = wat de node zelf op poort 80
+			// serveert (v3: welcome; een Go-desktop: /kvm, zijn scherm),
+			// Manage = de node beheren op gui.gethop.org.
 			// Beide zijn gewone links — deze tool stuurt NOOIT een sleutel
 			// mee; die vult de gebruiker daar zelf in (Derek 06-08).
-			kvm := widget.NewButtonWithIcon("GUI", theme.ComputerIcon(), nil)
+			kvm := widget.NewButtonWithIcon("Web", theme.ComputerIcon(), nil)
 			manage := widget.NewButtonWithIcon("Manage", theme.SettingsIcon(), nil)
 			return container.NewBorder(nil, nil, nil,
 				container.NewHBox(state.wrap, flavor.wrap, kvm, manage), name)
@@ -726,21 +734,34 @@ func (u *ui) findTab() fyne.CanvasObject {
 			name := row.Objects[0].(*widget.Label)
 			right := row.Objects[1].(*fyne.Container)
 			n := u.nodes[i]
-			name.SetText(fmt.Sprintf("%s   %s   ·   %s", n.IP, n.Name, n.Arch))
+			name.SetText(nodeLine(n))
 			// De pills opnieuw zetten: dezelfde objecten, andere inhoud.
 			setPillIn(right.Objects[0], n.State, stateColor(n.State))
-			fc := colHeadless
-			if n.Flavor == "desktop" {
-				fc = colDesktop
+			// Geen smaak als de boot niet meer in de ring van de console staat:
+			// dan weten we het niet, en "headless" gokken zou liegen.
+			if n.Flavor == "" {
+				right.Objects[1].Hide()
+			} else {
+				fc := colHeadless
+				if n.Flavor != "headless" {
+					fc = colDesktop
+				}
+				setPillIn(right.Objects[1], n.Flavor, fc)
+				right.Objects[1].Show()
 			}
-			setPillIn(right.Objects[1], n.Flavor, fc)
 
 			kvm := right.Objects[2].(*widget.Button)
-			kvm.OnTapped = func() { u.open("http://" + n.IP + "/kvm") }
-			// Een headless node serveert geen /kvm: dan is de knop er wel,
-			// maar dood — verbergen zou lezen als "deze node kan het niet",
-			// en dat is een configuratiekeuze, geen eigenschap.
+			// v3: welcome op poort 80 (headfull.cfg zaait hem). Een Go-desktop
+			// serveerde zijn eigen scherm op /kvm.
+			web := "http://" + n.IP + "/"
 			if n.Flavor == "desktop" {
+				web = "http://" + n.IP + "/kvm"
+			}
+			kvm.OnTapped = func() { u.open(web) }
+			// Serveert de node niets op poort 80, dan is de knop er wel, maar
+			// dood — verbergen zou lezen als "deze node kan het niet", en dat
+			// is een configuratiekeuze, geen eigenschap.
+			if n.Web || n.Flavor == "desktop" {
 				kvm.Enable()
 			} else {
 				kvm.Disable()
@@ -762,7 +783,7 @@ func (u *ui) findTab() fyne.CanvasObject {
 	// en stond hier alleen maar in de weg — Derek 07-08: "dat we zoeken op poort
 	// 5555, who cares". Wat er WEL hoort te staan is de belofte bij de knop die
 	// naar buiten gaat: deze tool geeft nooit een sleutel mee.
-	hint := canvas.NewText("Click a row to read a node's boot log. GUI opens its own screen; Manage hands only its name and address to gui.gethop.org — never a key.", hopMuted)
+	hint := canvas.NewText("Click a row to read a node's boot log. Web opens what the node serves on port 80; Manage hands only its name and address to gui.gethop.org — never a key.", hopMuted)
 	hint.TextSize = 11
 
 	return container.NewBorder(
@@ -770,6 +791,22 @@ func (u *ui) findTab() fyne.CanvasObject {
 		nil, nil, nil,
 		u.nodeList,
 	)
+}
+
+// nodeLine: adres, naam, en wat we verder zeker weten — arch en versie
+// alleen als de node ze ons vertelde.
+func nodeLine(n find.Node) string {
+	parts := []string{n.IP + "   " + n.Name}
+	if n.Arch != "?" {
+		parts = append(parts, n.Arch)
+	}
+	switch {
+	case n.Version != "":
+		parts = append(parts, "v"+n.Version)
+	case n.Go:
+		parts = append(parts, "HopOS v2 (Go)")
+	}
+	return strings.Join(parts, "   ·   ")
 }
 
 // setPillIn zet de tekst van een pill die als template in een lijstrij zit.
@@ -795,7 +832,7 @@ func stateColor(s string) color.Color {
 	switch {
 	case strings.HasPrefix(s, "agent up"):
 		return hopPhosphor
-	case strings.Contains(s, "parked"), strings.Contains(s, "no network"):
+	case strings.Contains(s, "parked"), strings.Contains(s, "no network"), strings.Contains(s, "down"):
 		return colWarn
 	default:
 		return hopMuted
@@ -837,7 +874,7 @@ func (u *ui) scanNetwork() {
 				if n.InsecND {
 					extra = " — API is OPEN (no key set)"
 				}
-				u.log(fmt.Sprintf("FOUND %s  node %s  %s  %s%s", n.IP, n.Name, n.Arch, n.State, extra))
+				u.log(fmt.Sprintf("FOUND %s  %s%s", strings.ReplaceAll(nodeLine(n), "   ·   ", "  "), n.State, extra))
 			},
 			u.findProg.begin2())
 		u.scanning = false
