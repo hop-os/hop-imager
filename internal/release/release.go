@@ -1,4 +1,4 @@
-// Package release praat met GitHub: de releases van xinix00/HopOS uitlezen —
+// Package release praat met GitHub: de releases van hop-os/HopOS uitlezen —
 // stable én beta — en een gekozen kaart-image downloaden (met voortgang, en
 // .gz transparant uitgepakt — het venster-patchen werkt op de rauwe bytes).
 package release
@@ -16,7 +16,7 @@ import (
 )
 
 // Repo is de bron van de images; één plek, zodat een fork hem kan verzetten.
-const Repo = "xinix00/HopOS"
+const Repo = "hop-os/HopOS"
 
 // De twee kanalen, in het woord dat de tool toont. GitHub kent alleen de vlag
 // "prerelease"; stable en beta is hoe een mens het noemt.
