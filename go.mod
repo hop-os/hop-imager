@@ -1,4 +1,4 @@
-module github.com/xinix00/hop-imager
+module github.com/hop-os/hop-imager
 
 go 1.26.4
 

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/xinix00/hop-imager/internal/release"
+	"github.com/hop-os/hop-imager/internal/release"
 )
 
 // De kaart-images van HopOS v2.2.8, de eerste release met drie smaken.

@@ -25,9 +25,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xinix00/hop-imager/internal/cfgwin"
-	"github.com/xinix00/hop-imager/internal/disk"
-	"github.com/xinix00/hop-imager/internal/priv"
+	"github.com/hop-os/hop-imager/internal/cfgwin"
+	"github.com/hop-os/hop-imager/internal/disk"
+	"github.com/hop-os/hop-imager/internal/priv"
 )
 
 // sectorSize is de uitlijning die een rauw device eist.

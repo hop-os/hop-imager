@@ -56,11 +56,11 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/xinix00/hop-imager/internal/cfgwin"
-	"github.com/xinix00/hop-imager/internal/disk"
-	"github.com/xinix00/hop-imager/internal/find"
-	"github.com/xinix00/hop-imager/internal/priv"
-	"github.com/xinix00/hop-imager/internal/release"
+	"github.com/hop-os/hop-imager/internal/cfgwin"
+	"github.com/hop-os/hop-imager/internal/disk"
+	"github.com/hop-os/hop-imager/internal/find"
+	"github.com/hop-os/hop-imager/internal/priv"
+	"github.com/hop-os/hop-imager/internal/release"
 )
 
 // iconPNG is de bunny uit tools/mkicon — hetzelfde beeld als het app-icoon, ook

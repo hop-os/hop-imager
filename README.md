@@ -137,7 +137,7 @@ also fixes the Sophgo FIP checksums that guard it.
 
 The same format is written by HopOS's own `image/mkcard -cfgwindow` and can be
 edited from the command line with `image/hopcfg` in the
-[HopOS repository](https://github.com/xinix00/HopOS).
+[HopOS repository](https://github.com/hop-os/HopOS).
 
 ## Privileges
 
